@@ -83,8 +83,12 @@ switch ($Command) {
             exit 1
         }
         if (Show-AgentWork) {
-            $answer = Read-Host 'Merge these into master and push to GitHub (public)? [y/N]'
-            if ($answer -ne 'y') { exit 0 }
+            # Trimmed, and the Cyrillic letter on the same key as "y" counts too.
+            $answer = (Read-Host 'Merge these into master and push to GitHub (public)? [y/N]').Trim()
+            if ($answer -notin @('y', 'yes', [string][char]0x043D)) {
+                Write-Host 'Nothing merged or pushed.'
+                exit 0
+            }
             git -C $Repo merge --no-edit agent
             Assert-Ok 'git merge agent'
         }
