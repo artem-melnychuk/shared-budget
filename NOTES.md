@@ -2,6 +2,16 @@
 
 Decisions made while working, newest first.
 
+## 2026-10-02: CSV export
+
+`python -m budget export --month 2026-10 [--out file.csv|-] [--plain] [--split 60/40]` (`budget/export.py`). Without `--month`, everything.
+
+- **Format**: default is for Excel in France: `;` separator, decimal comma, UTF-8 with BOM (otherwise Excel shows accents and Cyrillic as mojibake), CRLF. `--plain`: `,` and decimal point, for Power BI / pandas. Every row also has `amount_cents`, an integer that no locale can misread.
+- **Columns**: id, local date, time and month (Nice time, same month boundaries as the report), type (`expense`/`reimbursement`), amount, amount_cents, currency, payer key and display name, paid_to, shared (yes/no), category (English key, guessed if not set), description, `share_<member>` per member under the split rule (personal expenses: all on the payer), author, source, kind, payer_confirmed.
+- Expenses without an amount are exported with empty amount and shares, so they can be counted or filtered; reimbursements have no category, shared flag or shares.
+- Default output path is next to the database (`data/expenses-2026-10.csv`), which is gitignored; `expenses-*.csv` is gitignored too, since an export holds real amounts.
+- Cells starting with `= + - @` get a leading `'` so a description can't run as a spreadsheet formula. A negative amount never occurs (amounts are positive), so the `-` rule only touches text.
+
 ## 2026-10-02: more category rules
 
 - `budget/categories.py` now knows the common French chains (Carrefour, Monoprix, Franprix, Lidl, Aldi, Picard, Intermarché, Leclerc, Auchan, Super U, Biocoop, Grand Frais, Casino...), transport (SNCF, TER, Ouigo, Lignes d'Azur, Zou, TotalEnergies, Vinci, Indigo), home (IKEA, Leroy Merlin, EDF...), telecom/streaming, and Russian words, since descriptions may be typed in Russian.

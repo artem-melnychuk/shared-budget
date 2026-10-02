@@ -10,6 +10,7 @@ python -m budget import-export path\to\result.json   # backfill from a Telegram 
 python -m budget report --month 2026-10 --split 60/40  # who paid, who owes whom, by category
 python -m budget reimburse --from m2 --to m1 --amount 32.50 --date 2026-10-31  # a debt paid back
 python -m budget bot                                   # run the Telegram bot (needs TELEGRAM_BOT_TOKEN)
+python -m budget export --month 2026-10                # CSV for Excel; --plain for Power BI
 ```
 
 Members, database path and the default split come from `.env` (see `.env.example`).
