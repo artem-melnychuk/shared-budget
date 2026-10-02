@@ -44,9 +44,22 @@ Take ideas, not code wholesale; check the license first.
 - [tripsplitter](https://github.com/talkintomato/tripsplitter) (TypeScript, MIT): Telegram group bot that splits one receipt item by item.
 - [TaxHacker](https://github.com/vas3k/TaxHacker) (MIT): LLM receipt parsing with line items and custom categories; no splitting between people.
 
-## Telegram
+## Input: how expenses reach the bot (decided 2026-10-02)
 
-- In a group chat a bot sees only commands and mentions unless privacy mode is off (BotFather `/setprivacy`) or the bot is an admin.
+The two people already send each other receipts and notes in their private chat. A bot can't join a private 1:1 chat, so input comes three ways, all landing in the same expense log:
+
+1. **Forwarded messages** (main path now). Either person selects messages in their private chat and forwards them to the bot, many at once; each arrives as its own update with its photo, document or text and caption.
+   - The original author is in `message.forward_origin` (Bot API 7.0+): `MessageOriginUser` has `sender_user` (id + name); `MessageOriginHiddenUser` has only `sender_user_name`, a display-name string, when the author's Telegram privacy hides forwarded messages. Both carry `date`, the original send time; use it as the expense date, not the forward time.
+   - Map authors to the two members by user id, falling back to a configured display name for hidden users. Names live in config or `.env`, never in code or fixtures.
+   - A message with no `forward_origin` was written to the bot directly: its author is `message.from_user`.
+2. **Telegram Desktop chat export** (one-off backfill of old history). Chat menu, Export chat history, format JSON: `result.json` plus `photos/` and `files/` folders. Each entry in `messages` has `from` (name), `from_id` (`"user<digits>"`), `date`, and `photo` or `file` as a relative path. `text` is either a string or a list of strings and entity objects, so flatten it. Skip `type == "service"` entries.
+3. **A group "both of them + the bot"** (later, for new receipts). In a group a bot sees only commands, mentions and replies unless privacy mode is off (BotFather `/setprivacy`) or the bot is an admin. Author is `message.from_user`.
+
+Rules for all three:
+- Sender is not always payer: one person often photographs the other's receipt. Default payer = author, and the bot asks to confirm or change it with an inline button. Later, a card's last 4 digits printed on the receipt can map to its owner (as borton does).
+- Deduplicate: the same receipt forwarded twice, or present in both an export and a forward, must count once. Key a photo on the `file_unique_id` of its largest `PhotoSize` (Telegram keeps it stable across forwards and bots; it can't be used to download). For a JSON export, which has no `file_unique_id`, fall back to author + original date + amount.
+- Several photos sent together (an album) arrive as separate messages sharing a `media_group_id`.
+- Text-only messages (`12.50 boulangerie`, `35 courses`) are expenses too when they parse as an amount; otherwise ignore them.
 
 ## Sandbox (autonomous work)
 
