@@ -1,0 +1,54 @@
+{
+  "name": "Sam Example",
+  "type": "personal_chat",
+  "id": 4242,
+  "messages": [
+    {
+      "id": 1, "type": "service", "date": "2026-03-01T09:00:00", "date_unixtime": "1772355600",
+      "actor": "Alex Example", "actor_id": "user1001", "action": "phone_call", "text": ""
+    },
+    {
+      "id": 2, "type": "message", "date": "2026-03-14T11:15:00", "date_unixtime": "1773483300",
+      "from": "Sam Example", "from_id": "user1002",
+      "text": "12.50 boulangerie", "text_entities": [{"type": "plain", "text": "12.50 boulangerie"}]
+    },
+    {
+      "id": 3, "type": "message", "date": "2026-03-14T12:00:00", "date_unixtime": "1773486000",
+      "from": "Alex Example", "from_id": "user1001",
+      "photo": "photos/photo_1@14-03-2026_12-00-00.jpg", "width": 960, "height": 1280,
+      "text": "", "text_entities": []
+    },
+    {
+      "id": 4, "type": "message", "date": "2026-03-15T18:30:00",
+      "from": "Alex Example", "from_id": "user1001",
+      "text": ["35,80 ", {"type": "bold", "text": "courses"}, " marché"]
+    },
+    {
+      "id": 5, "type": "message", "date": "2026-03-15T18:31:00", "date_unixtime": "1773595860",
+      "from": "Sam Example", "from_id": "user1002",
+      "text": "ok, see you at 7"
+    },
+    {
+      "id": 6, "type": "message", "date": "2026-03-16T08:00:00", "date_unixtime": "1773644400",
+      "from": "Sam Example", "from_id": "user1002",
+      "file": "files/e-ticket.pdf", "file_name": "e-ticket.pdf", "mime_type": "application/pdf",
+      "text": "facture en ligne"
+    },
+    {
+      "id": 7, "type": "message", "date": "2026-03-16T08:05:00", "date_unixtime": "1773644700",
+      "from": "Sam Example", "from_id": "user1002",
+      "file": "stickers/sticker.webp", "media_type": "sticker", "mime_type": "image/webp", "text": ""
+    },
+    {
+      "id": 8, "type": "message", "date": "2026-03-16T09:00:00", "date_unixtime": "1773648000",
+      "from": "Someone Else", "from_id": "user7777",
+      "text": "20 pizza"
+    },
+    {
+      "id": 9, "type": "message", "date": "2026-03-17T10:00:00", "date_unixtime": "1773738000",
+      "from": "Sam Example", "from_id": "user1002",
+      "photo": "(File not included. Change data exporting settings to download.)",
+      "text": "9.90 pharmacie"
+    }
+  ]
+}

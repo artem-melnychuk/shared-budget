@@ -1,1 +1,2 @@
 # Runtime dependencies, one per line.
+tzdata  # IANA time zones for zoneinfo on Windows, where the OS has none
