@@ -2,6 +2,10 @@
 
 Only facts are stored: who wrote it, who paid, shared or personal, the amount.
 How a shared expense is split is a rule applied when balances are computed.
+
+A reimbursement (money one member gives back to the other, as in Spliit) is a
+row too: `is_reimbursement = 1`, `payer` sends, `paid_to` receives. It moves
+the balance but is not spending, so it stays out of totals and categories.
 """
 
 import sqlite3
@@ -11,10 +15,10 @@ from datetime import datetime, timezone
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS expenses (
     id              INTEGER PRIMARY KEY,
-    source          TEXT    NOT NULL,           -- 'telegram' | 'export'
+    source          TEXT    NOT NULL,           -- 'telegram' | 'export' | 'manual'
     chat_id         INTEGER,
     message_id      INTEGER NOT NULL,
-    kind            TEXT    NOT NULL,           -- 'photo' | 'document' | 'text'
+    kind            TEXT    NOT NULL,           -- 'photo' | 'document' | 'text' | 'manual'
     original_date   TEXT    NOT NULL,           -- ISO 8601, UTC, when the author sent it
     received_at     TEXT    NOT NULL,           -- ISO 8601, UTC, when we stored it
     author          TEXT,                       -- member key of the original author
@@ -25,6 +29,8 @@ CREATE TABLE IF NOT EXISTS expenses (
     payer           TEXT,                       -- member key; defaults to author
     payer_confirmed INTEGER NOT NULL DEFAULT 0,
     is_shared       INTEGER NOT NULL DEFAULT 1,
+    is_reimbursement INTEGER NOT NULL DEFAULT 0,
+    paid_to         TEXT,                       -- member key receiving a reimbursement
     amount_cents    INTEGER,                    -- NULL until a receipt is recognised
     currency        TEXT    NOT NULL DEFAULT 'EUR',
     description     TEXT,
@@ -67,6 +73,8 @@ class Expense:
     author_name: str | None = None
     forwarded: bool = False
     is_shared: bool = True
+    is_reimbursement: bool = False
+    paid_to: str | None = None
     payer_confirmed: bool = False
     amount_cents: int | None = None
     currency: str = "EUR"
@@ -96,8 +104,14 @@ class Store:
     def _migrate(self):
         """Add columns that databases created by older versions lack."""
         existing = {r["name"] for r in self.db.execute("PRAGMA table_info(expenses)")}
-        if existing and "category" not in existing:
-            self.db.execute("ALTER TABLE expenses ADD COLUMN category TEXT")
+        added = {
+            "category": "TEXT",
+            "is_reimbursement": "INTEGER NOT NULL DEFAULT 0",
+            "paid_to": "TEXT",
+        }
+        for column, definition in added.items():
+            if existing and column not in existing:
+                self.db.execute(f"ALTER TABLE expenses ADD COLUMN {column} {definition}")
 
     def close(self):
         self.db.close()
@@ -106,7 +120,7 @@ class Store:
         if row is None:
             return None
         data = dict(row)
-        for flag in ("forwarded", "is_shared", "payer_confirmed"):
+        for flag in ("forwarded", "is_shared", "payer_confirmed", "is_reimbursement"):
             data[flag] = bool(data[flag])
         return Expense(**data)
 
@@ -160,6 +174,30 @@ class Store:
         self.db.commit()
         e.id = cur.lastrowid
         return e.id
+
+    def add_reimbursement(self, payer: str, paid_to: str, amount_cents: int, when: datetime,
+                          currency: str = "EUR", description: str | None = None) -> int:
+        """Record money `payer` gave back to `paid_to` (bank transfer, cash...)."""
+        if payer == paid_to:
+            raise ValueError("a reimbursement goes from one member to another")
+        if amount_cents <= 0:
+            raise ValueError("a reimbursement must be a positive amount")
+        last = self.db.execute(
+            "SELECT MAX(message_id) FROM expenses WHERE source = 'manual'").fetchone()[0]
+        return self.add(Expense(
+            source="manual", chat_id=None, message_id=(last or 0) + 1, kind="manual",
+            original_date=iso(when), author=payer, payer=payer, payer_confirmed=True,
+            is_shared=False, is_reimbursement=True, paid_to=paid_to,
+            amount_cents=amount_cents, currency=currency, description=description))
+
+    def mark_reimbursement(self, expense_id: int, paid_to: str | None):
+        """Turn a stored entry (say, a forwarded transfer screenshot) into a
+        reimbursement to `paid_to`, or back into an expense with None."""
+        self.db.execute(
+            "UPDATE expenses SET is_reimbursement = ?, paid_to = ?,"
+            " is_shared = CASE WHEN ? THEN 0 ELSE is_shared END WHERE id = ?",
+            (int(paid_to is not None), paid_to, int(paid_to is not None), expense_id))
+        self.db.commit()
 
     def set_payer(self, expense_id: int, payer: str):
         self.db.execute("UPDATE expenses SET payer = ?, payer_confirmed = 1 WHERE id = ?",

@@ -2,6 +2,18 @@
 
 Decisions made while working, newest first.
 
+## 2026-10-02: reimbursements (paying back a debt)
+
+Modelled as in Spliit: a reimbursement is a row in `expenses` with `is_reimbursement = 1`; `payer` is who gives the money, new column `paid_to` is who gets it. Old databases get both columns on open.
+
+Decisions:
+- **Effect**: only the nets move (`net = paid_shared - share + sent - received`). Not spending: excluded from totals, `spent`, categories and the expense count; independent of the split rule.
+- **Recording**: `python -m budget reimburse --from sam --to alex --amount 32.50 [--date YYYY-MM-DD] [--note ...]` (`Store.add_reimbursement`), stored with `source = 'manual'`. A bare `--date` means 12:00 local time, safely inside that day and month; no date means now. Running it twice records two transfers on purpose: no dedup, two equal transfers on the same day are possible.
+- `Store.mark_reimbursement(id, paid_to)` turns a stored entry (say a forwarded bank-transfer screenshot) into a reimbursement, or back with `None`; for the bot's future "this was a payback" button.
+- **Report**: a "Reimbursements" list for the month, and "paid back" / "got back" columns in the member table when the month has any. The month's balance includes that month's reimbursements, so a payback that also covered earlier months can make the month's line flip (e.g. "alex owes sam 5 €"); the running balance ("everything up to the end of the month") is the one to settle.
+- Skipped like expenses: a reimbursement whose receiver isn't a member counts as "without a payer"; one in another currency as "other currency".
+- Still to do in the bot: recognising a payback from Telegram (a text like `remboursé 32` or a transfer screenshot). Not done here.
+
 ## 2026-10-02: balance and monthly report
 
 Modules: `budget/balance.py` (split rule, balance, settlement), `budget/categories.py`, `budget/report.py`; command `python -m budget report --month 2026-10 [--split 60/40]`.
@@ -10,7 +22,7 @@ Decisions:
 - **Split rule** is a parameter (`SplitRule`), never stored: weights per member key. `--split 60/40` (or `BUDGET_SPLIT` in `.env`) gives weights in member order (MEMBER_1, MEMBER_2); default even. Shares are whole cents that add up to the amount exactly (largest remainder; a tie for the leftover cent goes to the first member).
 - **Balance**: per member `paid_shared`, `paid_personal`, `share` (their part of every shared expense), `net = paid_shared - share` (positive = is owed), `spent = share + personal`. Personal expenses appear in totals but never create debt. Debts come from a greedy settlement of the nets (exact for two people, works for more).
 - **Not counted, shown as counters**: no amount (receipt not recognised yet), payer missing or not a configured member key, currency other than the report's (`--currency`, default EUR). No conversion between currencies.
-- **Month** is a calendar month in local time (`BUDGET_TZ`, default Europe/Paris), so 23:30 UTC on 31 Oct counts in November. The report shows the month's balance and the running balance of everything up to the end of the month. Reimbursements/settle-ups aren't modelled yet, so the running balance only grows until they are (Spliit's `isReimbursement` is the model to copy).
+- **Month** is a calendar month in local time (`BUDGET_TZ`, default Europe/Paris), so 23:30 UTC on 31 Oct counts in November. The report shows the month's balance and the running balance of everything up to the end of the month. Reimbursements: see the entry above.
 - **Categories**: new nullable `expenses.category` column for a category chosen by a person (`Store.set_category`); old databases get it via `ALTER TABLE` on open. When it's empty the report guesses from the description with French keyword prefixes (`budget/categories.py`), at report time, so better rules re-sort old expenses without touching stored data. Fallback category `other`.
 - **Report language**: English for now, like the code; the bot's language is still an open question.
 - Added `Store.set_amount` so a recognised amount can be filled in later (tests use it).
