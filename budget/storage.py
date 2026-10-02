@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS expenses (
     amount_cents    INTEGER,                    -- NULL until a receipt is recognised
     currency        TEXT    NOT NULL DEFAULT 'EUR',
     description     TEXT,
+    category        TEXT,                       -- chosen by a person; NULL = guess from description
     text            TEXT,                       -- message text or caption as received
     media_group_id  TEXT,
     file_id         TEXT,
@@ -41,6 +42,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS expenses_file_unique_id
     ON expenses (file_unique_id) WHERE file_unique_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS expenses_author_date_amount
     ON expenses (author, original_date, amount_cents);
+CREATE INDEX IF NOT EXISTS expenses_original_date
+    ON expenses (original_date);
 CREATE INDEX IF NOT EXISTS expenses_media_group
     ON expenses (media_group_id) WHERE media_group_id IS NOT NULL;
 """
@@ -68,6 +71,7 @@ class Expense:
     amount_cents: int | None = None
     currency: str = "EUR"
     description: str | None = None
+    category: str | None = None
     text: str | None = None
     media_group_id: str | None = None
     file_id: str | None = None
@@ -86,7 +90,14 @@ class Store:
     def __init__(self, path: str = ":memory:"):
         self.db = sqlite3.connect(path)
         self.db.row_factory = sqlite3.Row
+        self._migrate()
         self.db.executescript(SCHEMA)
+
+    def _migrate(self):
+        """Add columns that databases created by older versions lack."""
+        existing = {r["name"] for r in self.db.execute("PRAGMA table_info(expenses)")}
+        if existing and "category" not in existing:
+            self.db.execute("ALTER TABLE expenses ADD COLUMN category TEXT")
 
     def close(self):
         self.db.close()
@@ -105,6 +116,13 @@ class Store:
 
     def all(self) -> list[Expense]:
         rows = self.db.execute("SELECT * FROM expenses ORDER BY original_date, id")
+        return [self._expense(r) for r in rows]
+
+    def between(self, start: datetime, end: datetime) -> list[Expense]:
+        """Expenses whose original date is in [start, end)."""
+        rows = self.db.execute(
+            "SELECT * FROM expenses WHERE original_date >= ? AND original_date < ?"
+            " ORDER BY original_date, id", (iso(start), iso(end)))
         return [self._expense(r) for r in rows]
 
     def media_group(self, media_group_id: str) -> list[Expense]:
@@ -146,6 +164,15 @@ class Store:
     def set_payer(self, expense_id: int, payer: str):
         self.db.execute("UPDATE expenses SET payer = ?, payer_confirmed = 1 WHERE id = ?",
                         (payer, expense_id))
+        self.db.commit()
+
+    def set_category(self, expense_id: int, category: str | None):
+        self.db.execute("UPDATE expenses SET category = ? WHERE id = ?", (category, expense_id))
+        self.db.commit()
+
+    def set_amount(self, expense_id: int, amount_cents: int, currency: str = "EUR"):
+        self.db.execute("UPDATE expenses SET amount_cents = ?, currency = ? WHERE id = ?",
+                        (amount_cents, currency, expense_id))
         self.db.commit()
 
     def set_shared(self, expense_id: int, is_shared: bool):

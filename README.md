@@ -6,7 +6,11 @@ A Telegram bot that turns receipts (photos, e-receipts, quick text entries) into
 
 ```powershell
 python -m unittest discover -s tests
+python -m budget import-export path\to\result.json   # backfill from a Telegram Desktop export
+python -m budget report --month 2026-10 --split 60/40  # who paid, who owes whom, by category
 ```
+
+Members, database path and the default split come from `.env` (see `.env.example`).
 
 ## Autonomous development in Docker
 

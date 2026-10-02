@@ -2,6 +2,19 @@
 
 Decisions made while working, newest first.
 
+## 2026-10-02: balance and monthly report
+
+Modules: `budget/balance.py` (split rule, balance, settlement), `budget/categories.py`, `budget/report.py`; command `python -m budget report --month 2026-10 [--split 60/40]`.
+
+Decisions:
+- **Split rule** is a parameter (`SplitRule`), never stored: weights per member key. `--split 60/40` (or `BUDGET_SPLIT` in `.env`) gives weights in member order (MEMBER_1, MEMBER_2); default even. Shares are whole cents that add up to the amount exactly (largest remainder; a tie for the leftover cent goes to the first member).
+- **Balance**: per member `paid_shared`, `paid_personal`, `share` (their part of every shared expense), `net = paid_shared - share` (positive = is owed), `spent = share + personal`. Personal expenses appear in totals but never create debt. Debts come from a greedy settlement of the nets (exact for two people, works for more).
+- **Not counted, shown as counters**: no amount (receipt not recognised yet), payer missing or not a configured member key, currency other than the report's (`--currency`, default EUR). No conversion between currencies.
+- **Month** is a calendar month in local time (`BUDGET_TZ`, default Europe/Paris), so 23:30 UTC on 31 Oct counts in November. The report shows the month's balance and the running balance of everything up to the end of the month. Reimbursements/settle-ups aren't modelled yet, so the running balance only grows until they are (Spliit's `isReimbursement` is the model to copy).
+- **Categories**: new nullable `expenses.category` column for a category chosen by a person (`Store.set_category`); old databases get it via `ALTER TABLE` on open. When it's empty the report guesses from the description with French keyword prefixes (`budget/categories.py`), at report time, so better rules re-sort old expenses without touching stored data. Fallback category `other`.
+- **Report language**: English for now, like the code; the bot's language is still an open question.
+- Added `Store.set_amount` so a recognised amount can be filled in later (tests use it).
+
 ## 2026-10-02: first input layer (no live bot, no receipt recognition)
 
 Modules in `budget/`: `telegram_update` (Bot API update JSON → `Incoming`), `chat_export` (Telegram Desktop `result.json` → `Incoming`), `members` (who is who), `text_entry` (`12.50 boulangerie`), `storage` (SQLite), `ingest` (glue + dedup), `__main__` (`python -m budget import-export result.json`). Standard library only, plus `tzdata` so `zoneinfo` works on Windows.
