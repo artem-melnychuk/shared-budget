@@ -37,3 +37,15 @@ def parse_text_expense(text: str | None) -> TextExpense | None:
     if cents <= 0:
         return None
     return TextExpense(cents, (match["desc"] or "").strip())
+
+
+_PLAIN_AMOUNT = re.compile(rf"^\s*(?:€\s*)?{_AMOUNT}\s*{_CURRENCY}?\s*$", re.IGNORECASE)
+
+
+def parse_amount(text: str | None) -> int | None:
+    """`32`, `32.5`, `32,50 €` -> cents; None if it isn't a positive amount."""
+    match = _PLAIN_AMOUNT.match(text or "")
+    if not match:
+        return None
+    cents = int(match["int"]) * 100 + int((match["dec"] or "").ljust(2, "0"))
+    return cents or None

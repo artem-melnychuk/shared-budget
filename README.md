@@ -8,6 +8,7 @@ A Telegram bot that turns receipts (photos, e-receipts, quick text entries) into
 python -m unittest discover -s tests
 python -m budget import-export path\to\result.json   # backfill from a Telegram Desktop export
 python -m budget report --month 2026-10 --split 60/40  # who paid, who owes whom, by category
+python -m budget reimburse --from m2 --to m1 --amount 32.50 --date 2026-10-31  # a debt paid back
 ```
 
 Members, database path and the default split come from `.env` (see `.env.example`).

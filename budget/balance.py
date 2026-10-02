@@ -66,6 +66,8 @@ class MemberTotals:
     paid_shared: int = 0     # shared expenses this member paid for
     paid_personal: int = 0   # personal expenses this member paid for
     share: int = 0           # this member's part of all shared expenses
+    sent: int = 0            # reimbursements this member gave
+    received: int = 0        # reimbursements this member got
 
     @property
     def paid(self) -> int:
@@ -74,7 +76,7 @@ class MemberTotals:
     @property
     def net(self) -> int:
         """Positive: the others owe this member. Negative: this member owes."""
-        return self.paid_shared - self.share
+        return self.paid_shared - self.share + self.sent - self.received
 
     @property
     def spent(self) -> int:
@@ -95,6 +97,7 @@ class Balance:
     currency: str
     members: dict[str, MemberTotals]
     counted: list[Expense] = field(default_factory=list)
+    reimbursements: list[Expense] = field(default_factory=list)
     without_amount: list[Expense] = field(default_factory=list)
     without_payer: list[Expense] = field(default_factory=list)
     other_currency: list[Expense] = field(default_factory=list)
@@ -135,15 +138,21 @@ def compute_balance(expenses: Iterable[Expense], rule: SplitRule, currency: str 
 
     Skipped and counted separately: expenses without an amount (receipt not
     recognised yet), without a payer who is a member, or in another currency.
+    Reimbursements move money between members and only change the nets; one
+    whose receiver isn't a member counts as without a payer.
     """
     balance = Balance(rule, currency, {k: MemberTotals() for k in rule.members})
     for e in expenses:
         if e.amount_cents is None:
             balance.without_amount.append(e)
-        elif e.payer not in balance.members:
+        elif e.payer not in balance.members or (e.is_reimbursement and e.paid_to not in balance.members):
             balance.without_payer.append(e)
         elif e.currency != currency:
             balance.other_currency.append(e)
+        elif e.is_reimbursement:
+            balance.reimbursements.append(e)
+            balance.members[e.payer].sent += e.amount_cents
+            balance.members[e.paid_to].received += e.amount_cents
         else:
             balance.counted.append(e)
             payer = balance.members[e.payer]

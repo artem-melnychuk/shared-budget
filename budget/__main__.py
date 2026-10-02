@@ -2,12 +2,13 @@
 
     python -m budget import-export path/to/result.json
     python -m budget report --month 2026-10 [--split 60/40]
+    python -m budget reimburse --from sam --to alex --amount 32.00 [--date 2026-10-31]
 """
 
 import argparse
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
 from budget.chat_export import DEFAULT_TZ, load_export
@@ -16,6 +17,7 @@ from budget.balance import SplitRule
 from budget.members import Members
 from budget.report import build_report, parse_month, render
 from budget.storage import Store
+from budget.text_entry import parse_amount
 
 
 def read_env_file(path: str) -> dict[str, str]:
@@ -71,6 +73,41 @@ def _report(args, env, members) -> int:
     return 0
 
 
+def _reimburse(args, env, members) -> int:
+    keys = [m.key for m in members.members]
+    tz = ZoneInfo(env.get("BUDGET_TZ") or DEFAULT_TZ)
+    errors = []
+    for who in (args.payer, args.paid_to):
+        if who not in keys:
+            errors.append(f"unknown member {who!r}; members are {', '.join(keys)}")
+    if args.payer == args.paid_to:
+        errors.append("--from and --to must be different members")
+    amount = parse_amount(args.amount)
+    if amount is None:
+        errors.append(f"amount {args.amount!r} must look like 32 or 32.50")
+    try:
+        # A bare date means noon local time, safely inside that day and month.
+        when = datetime.combine(datetime.strptime(args.date, "%Y-%m-%d").date(), time(12), tz) \
+            if args.date else datetime.now(tz)
+    except ValueError:
+        errors.append(f"date {args.date!r} must look like 2026-10-31")
+    if errors:
+        print("\n".join(errors), file=sys.stderr)
+        return 2
+    db_path = env.get("BUDGET_DB") or "data/budget.db"
+    os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+    store = Store(db_path)
+    try:
+        store.add_reimbursement(args.payer, args.paid_to, amount, when,
+                                currency=args.currency, description=args.note)
+    finally:
+        store.close()
+    symbol = "€" if args.currency == "EUR" else args.currency
+    print(f"recorded: {args.payer} paid back {args.paid_to} {amount // 100}.{amount % 100:02d} {symbol}"
+          f" on {when:%Y-%m-%d}")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="python -m budget")
     parser.add_argument("--env", default=".env", help="env file (default .env); real env vars win")
@@ -81,13 +118,20 @@ def main(argv=None) -> int:
     rep.add_argument("--month", help="YYYY-MM, default the current month")
     rep.add_argument("--split", help="weights in member order, e.g. 60/40 (default 50/50 or BUDGET_SPLIT)")
     rep.add_argument("--currency", default="EUR")
-    for p in (imp, rep):
+    reim = sub.add_parser("reimburse", help="record money one member paid back to the other")
+    reim.add_argument("--from", dest="payer", required=True, help="member key who gave the money")
+    reim.add_argument("--to", dest="paid_to", required=True, help="member key who received it")
+    reim.add_argument("--amount", required=True, help="e.g. 32.50")
+    reim.add_argument("--date", help="YYYY-MM-DD, default now")
+    reim.add_argument("--note", help="optional, e.g. 'bank transfer'")
+    reim.add_argument("--currency", default="EUR")
+    for p in (imp, rep, reim):
         p.add_argument("--env", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
     env = read_env_file(args.env)
     members = Members.from_env(env)
-    command = {"import-export": _import_export, "report": _report}[args.command]
+    command = {"import-export": _import_export, "report": _report, "reimburse": _reimburse}[args.command]
     return command(args, env, members)
 
 

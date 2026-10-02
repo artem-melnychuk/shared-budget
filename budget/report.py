@@ -46,6 +46,7 @@ class MonthReport:
     month_balance: Balance
     running_balance: Balance        # everything up to the end of the month
     categories: dict[str, CategoryLine]
+    tz_name: str = DEFAULT_TZ
 
     @property
     def rule(self) -> SplitRule:
@@ -69,7 +70,7 @@ def build_report(store: Store, month: date, rule: SplitRule,
             line.personal += e.amount_cents
             line.spent_by[e.payer] += e.amount_cents
     ordered = dict(sorted(categories.items(), key=lambda kv: (-kv[1].total, kv[0])))
-    return MonthReport(month, month_balance, running, ordered)
+    return MonthReport(month, month_balance, running, ordered, tz_name)
 
 
 def money(cents: int, currency: str = "EUR") -> str:
@@ -121,9 +122,17 @@ def render(report: MonthReport) -> str:
         out += ["Not counted:", *skipped]
 
     out += ["", "By member"]
-    rows = [[k, m(t.paid), m(t.paid_shared), m(t.paid_personal), m(t.share), m(t.spent), m(t.net)]
+    header = ["member", "paid", "paid shared", "paid personal", "share of shared", "spent"]
+    rows = [[k, m(t.paid), m(t.paid_shared), m(t.paid_personal), m(t.share), m(t.spent)]
             for k, t in b.members.items()]
-    out += _table(["member", "paid", "paid shared", "paid personal", "share of shared", "spent", "net"], rows)
+    if b.reimbursements:
+        header += ["paid back", "got back"]
+        for row, t in zip(rows, b.members.values()):
+            row += [m(t.sent), m(t.received)]
+    header.append("net")
+    for row, t in zip(rows, b.members.values()):
+        row.append(m(t.net))
+    out += _table(header, rows)
 
     out += ["", "By category (spent = share of shared + own personal)"]
     if report.categories:
@@ -132,6 +141,14 @@ def render(report: MonthReport) -> str:
         out += _table(["category", "total", "shared", "personal", *(f"{k} spent" for k in keys)], rows)
     else:
         out.append("  nothing this month")
+
+    if b.reimbursements:
+        tz = ZoneInfo(report.tz_name)
+        out += ["", "Reimbursements"]
+        for e in b.reimbursements:
+            when = datetime.fromisoformat(e.original_date).astimezone(tz)
+            note = f" ({e.description})" if e.description else ""
+            out.append(f"  {when:%Y-%m-%d} {e.payer} paid back {e.paid_to} {m(e.amount_cents)}{note}")
 
     out += ["", "Who owes whom, this month:", *_debts(b)]
     out += [f"Who owes whom, everything up to the end of {report.month:%Y-%m}:", *_debts(report.running_balance)]
