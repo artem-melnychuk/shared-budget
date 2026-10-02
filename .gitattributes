@@ -1,0 +1,2 @@
+# LF everywhere, so the Windows checkout and the Linux sandbox see the same bytes.
+* text=auto eol=lf

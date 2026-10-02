@@ -1,0 +1,49 @@
+# Sandbox for running Claude Code unattended on shared_budget.
+#
+# Two containers on two networks:
+#   agent  - Claude Code + Python, on the `internal` network only (no route out).
+#   proxy  - squid allowlist proxy, on `internal` and `egress`; the agent's
+#            only way to the internet.
+# The agent works on a separate clone (../../shared_budget_sandbox, branch
+# `agent`), so the host checkout and `master` are never touched from inside.
+#
+# Normally driven by ..\sandbox.ps1. Raw use, from the repo root:
+#   docker compose -f .sandbox/compose.yaml up -d
+#   docker compose -f .sandbox/compose.yaml exec agent claude --dangerously-skip-permissions
+
+name: shared-budget-sandbox
+
+services:
+  proxy:
+    build: ./squid
+    image: shared-budget-proxy
+    container_name: budget-proxy
+    networks: [internal, egress]
+
+  agent:
+    build: .
+    image: shared-budget-agent
+    container_name: budget-agent
+    depends_on: [proxy]
+    networks: [internal]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    environment:
+      HTTP_PROXY: http://budget-proxy:3128
+      HTTPS_PROXY: http://budget-proxy:3128
+      http_proxy: http://budget-proxy:3128
+      https_proxy: http://budget-proxy:3128
+      NO_PROXY: localhost,127.0.0.1
+      no_proxy: localhost,127.0.0.1
+    volumes:
+      - ../../shared_budget_sandbox:/work
+      - claude-config:/home/agent/.claude
+
+networks:
+  internal:
+    internal: true
+  egress: {}
+
+volumes:
+  claude-config:
+    name: shared-budget-claude
