@@ -4,9 +4,11 @@ Shared-expense tracker for a couple living in Nice, France. Goal: see who pays f
 
 This repo is public. Keep personal details (names, real amounts, shops, receipts) out of code, tests, docs and commit messages.
 
-## Status
+## Status (end of 2026-10-02)
 
-Empty skeleton (2026-10-02). There is no approved project plan yet: the decisions below are the starting point, not a spec. Build what the current task asks, not the whole idea.
+Built and covered by offline tests: the input layer (forwards, Telegram Desktop export, members, dedup), the SQLite store, balance with the split rule as a parameter, reimbursements, a monthly report with categories and a "where to save" block, CSV export for Excel/Power BI, and a long-polling bot (`python -m budget bot`) on a standard-library Bot API client. Decisions for each piece are in `NOTES.md`.
+
+Not done yet: a first live run with a real bot token, receipt recognition (amounts for photos are typed in by hand for now), 24/7 hosting. There is no approved overall plan: build what the current task asks.
 
 ## Decided (2026-10-01)
 
@@ -20,7 +22,9 @@ Empty skeleton (2026-10-02). There is no approved project plan yet: the decision
 
 - Receipt recognition: Gemini API free tier (Google uses free-tier request content to improve its products, so receipts would go to Google) vs a local model on the home PC (8 GB VRAM GPU) vs plain OCR plus rules.
 - Where the bot runs 24/7 for free.
-- Language of the bot's messages.
+- Thresholds of the "where to save" block: see "Open questions for the owner" in `NOTES.md`.
+
+The bot speaks Russian; all its texts live in `budget/texts.py`.
 
 ## Conventions
 
