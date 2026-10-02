@@ -23,6 +23,11 @@ class Member:
     telegram_ids: frozenset[int] = field(default_factory=frozenset)
     names: tuple[str, ...] = ()
 
+    @property
+    def display(self) -> str:
+        """First configured name, else the key."""
+        return self.names[0] if self.names else self.key
+
 
 class Members:
     def __init__(self, members: list[Member]):
@@ -48,6 +53,13 @@ class Members:
                 names=tuple(x.strip() for x in names.split(",") if x.strip()),
             ))
         return cls(members)
+
+    def by_key(self, key: str | None) -> Member | None:
+        return next((m for m in self.members if m.key == key), None)
+
+    def display(self, key: str | None) -> str:
+        member = self.by_key(key)
+        return member.display if member else (key or "?")
 
     def by_user_id(self, user_id: int | None) -> Member | None:
         return self._by_id.get(user_id) if user_id is not None else None

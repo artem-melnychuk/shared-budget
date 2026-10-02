@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 
 from budget.balance import Balance, SplitRule, compute_balance
 from budget.categories import category_of
+from budget.savings import Savings, analyze
 from budget.storage import Store
 
 DEFAULT_TZ = "Europe/Paris"
@@ -47,6 +48,7 @@ class MonthReport:
     running_balance: Balance        # everything up to the end of the month
     categories: dict[str, CategoryLine]
     tz_name: str = DEFAULT_TZ
+    savings: Savings | None = None
 
     @property
     def rule(self) -> SplitRule:
@@ -70,7 +72,8 @@ def build_report(store: Store, month: date, rule: SplitRule,
             line.personal += e.amount_cents
             line.spent_by[e.payer] += e.amount_cents
     ordered = dict(sorted(categories.items(), key=lambda kv: (-kv[1].total, kv[0])))
-    return MonthReport(month, month_balance, running, ordered, tz_name)
+    savings = analyze(store, month, rule, tz_name, currency)
+    return MonthReport(month, month_balance, running, ordered, tz_name, savings)
 
 
 def money(cents: int, currency: str = "EUR") -> str:
@@ -104,6 +107,34 @@ def _skipped(balance: Balance) -> list[str]:
     if balance.other_currency:
         lines.append(f"  {len(balance.other_currency)} in a currency other than {balance.currency}")
     return lines
+
+
+def _percent(share: float) -> str:
+    return f"{share * 100:.0f}%"
+
+
+def _savings(s: Savings | None, cur: str) -> list[str]:
+    from budget import savings as rules
+
+    if s is None or s.empty:
+        return ["  nothing stands out"]
+    out = []
+    if s.recurring:
+        out.append(f"  Recurring (same amount, same seller, {rules.RECURRING_MONTHS} months in a row):")
+        out += [f"    {r.seller}: {money(r.amount_cents, cur)} a month, {money(r.yearly_cents, cur)} a year"
+                for r in s.recurring]
+    if s.small:
+        out.append(f"  Frequent small spending (at least {rules.SMALL_MIN_COUNT} times up to "
+                   f"{money(rules.SMALL_LIMIT_CENTS, cur)}):")
+        out += [f"    {x.category}: {x.count} times, {money(x.total_cents, cur)}" for x in s.small]
+    e = s.eating
+    if e and e.eating_cents:
+        parts = ", ".join(f"{c} {money(v, cur)}" for c, v in e.by_category.items() if v)
+        line = f"  Delivery and eating out: {money(e.eating_cents, cur)} ({parts}), {_percent(e.share)} of spending"
+        if e.previous_share is not None:
+            line += f"; previous month {_percent(e.previous_share)}"
+        out.append(line)
+    return out
 
 
 def render(report: MonthReport) -> str:
@@ -149,6 +180,8 @@ def render(report: MonthReport) -> str:
             when = datetime.fromisoformat(e.original_date).astimezone(tz)
             note = f" ({e.description})" if e.description else ""
             out.append(f"  {when:%Y-%m-%d} {e.payer} paid back {e.paid_to} {m(e.amount_cents)}{note}")
+
+    out += ["", "Where to save", *_savings(report.savings, cur)]
 
     out += ["", "Who owes whom, this month:", *_debts(b)]
     out += [f"Who owes whom, everything up to the end of {report.month:%Y-%m}:", *_debts(report.running_balance)]

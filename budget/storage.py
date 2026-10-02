@@ -52,6 +52,14 @@ CREATE INDEX IF NOT EXISTS expenses_original_date
     ON expenses (original_date);
 CREATE INDEX IF NOT EXISTS expenses_media_group
     ON expenses (media_group_id) WHERE media_group_id IS NOT NULL;
+
+-- Bot messages showing an expense, so a reply to one can find it.
+CREATE TABLE IF NOT EXISTS cards (
+    chat_id     INTEGER NOT NULL,
+    message_id  INTEGER NOT NULL,
+    expense_id  INTEGER NOT NULL REFERENCES expenses (id) ON DELETE CASCADE,
+    PRIMARY KEY (chat_id, message_id)
+);
 """
 
 
@@ -98,6 +106,7 @@ class Store:
     def __init__(self, path: str = ":memory:"):
         self.db = sqlite3.connect(path)
         self.db.row_factory = sqlite3.Row
+        self.db.execute("PRAGMA foreign_keys = ON")
         self._migrate()
         self.db.executescript(SCHEMA)
 
@@ -197,6 +206,28 @@ class Store:
             "UPDATE expenses SET is_reimbursement = ?, paid_to = ?,"
             " is_shared = CASE WHEN ? THEN 0 ELSE is_shared END WHERE id = ?",
             (int(paid_to is not None), paid_to, int(paid_to is not None), expense_id))
+        self.db.commit()
+
+    def delete(self, expense_id: int):
+        self.db.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
+        self.db.commit()
+
+    def add_card(self, chat_id: int, message_id: int, expense_id: int):
+        self.db.execute("INSERT OR REPLACE INTO cards (chat_id, message_id, expense_id) VALUES (?, ?, ?)",
+                        (chat_id, message_id, expense_id))
+        self.db.commit()
+
+    def card_expense(self, chat_id: int, message_id: int) -> Expense | None:
+        return self._expense(self.db.execute(
+            "SELECT e.* FROM cards c JOIN expenses e ON e.id = c.expense_id"
+            " WHERE c.chat_id = ? AND c.message_id = ?", (chat_id, message_id)).fetchone())
+
+    def set_description(self, expense_id: int, description: str | None):
+        self.db.execute("UPDATE expenses SET description = ? WHERE id = ?", (description, expense_id))
+        self.db.commit()
+
+    def set_paid_to(self, expense_id: int, paid_to: str | None):
+        self.db.execute("UPDATE expenses SET paid_to = ? WHERE id = ?", (paid_to, expense_id))
         self.db.commit()
 
     def set_payer(self, expense_id: int, payer: str):
