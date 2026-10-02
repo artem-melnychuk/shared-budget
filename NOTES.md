@@ -2,6 +2,21 @@
 
 Decisions made while working, newest first.
 
+## 2026-10-02: live Telegram bot
+
+`python -m budget bot`: long polling, token from `TELEGRAM_BOT_TOKEN`. Modules: `budget/telegram_api.py` (client), `budget/bot.py` (logic + polling loop), `budget/texts.py` (every string the bot sends, Russian, HTML parse mode).
+
+Decisions:
+- **Library: none.** A ~60-line client on `urllib` calling the Bot API directly (`getUpdates`, `sendMessage`, `editMessageText`, `answerCallbackQuery`, `deleteWebhook`, `setMyCommands`). Considered python-telegram-bot (LGPL, async, big) and aiogram (MIT, async): both free, but for seven methods they add a dependency with frequent breaking releases, and offline tests need their internals mocked. Here tests swap the client for a fake with the same `call(method, **params)`. Errors never contain the URL (it holds the token); `retry_after` from 429 is respected; network errors back off 1→60 s. Switching to a library later only touches `telegram_api.py` and `run()`.
+- **Who is answered**: only messages and button presses from the configured member ids; everyone else is ignored silently (button presses get a "only for members" toast, since Telegram needs an answer to stop the spinner).
+- **Batches**: every message is stored on arrival; the reply waits until the same sender in the same chat has been quiet for 2 s (polling switches from 30 s to 1 s while a batch waits). One message → its card (or "already saved" + the existing card, or a hint for a text without an amount). Several → one summary listing added / already saved / skipped, with an "open" button per expense (up to 30 listed); pressing it sends that expense's card. So "a card per expense" holds, but on demand, as the user asked for one answer per batch.
+- **Cards**: amount (or "без суммы"), date in Nice time, payer (marked "по умолчанию" until confirmed), shared/personal, category (marked "по описанию" when guessed), description, source. Buttons: payer menu, shared⇄personal, category menu (Russian labels for the keys in `categories.py`; stored value stays the English key), "this is a reimbursement" (to the other member; with more members a menu), delete with confirmation. Reimbursement cards hide shared and category. Changing the payer of a reimbursement to its receiver swaps the receiver.
+- **Amount by reply**: replying to a card with `23,90` or `23,90 pharmacie` saves it via `set_amount` (and the description if the expense had none), edits the card and confirms. A reply also corrects an existing amount. New table `cards (chat_id, message_id, expense_id)` maps bot messages to expenses; rows go when the expense is deleted (FK cascade, `PRAGMA foreign_keys = ON`).
+- **Delete is a hard delete**; forwarding the same receipt again afterwards adds it again (dedup has nothing to match).
+- `/balance`: everything ever, with `BUDGET_SPLIT`. `/report [YYYY-MM]`: default current month in Nice. Texts are gender-neutral ("Долг: A → B", "оплачено") since the bot doesn't know the members' genders.
+- Shutdown (Ctrl+C) answers waiting batches before closing the database.
+- Not checked live: no token in the sandbox. First live run on the host: `python -m budget bot`, then forward a few messages.
+
 ## 2026-10-02: reimbursements (paying back a debt)
 
 Modelled as in Spliit: a reimbursement is a row in `expenses` with `is_reimbursement = 1`; `payer` is who gives the money, new column `paid_to` is who gets it. Old databases get both columns on open.

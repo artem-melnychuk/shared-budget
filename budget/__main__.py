@@ -3,9 +3,11 @@
     python -m budget import-export path/to/result.json
     python -m budget report --month 2026-10 [--split 60/40]
     python -m budget reimburse --from sam --to alex --amount 32.00 [--date 2026-10-31]
+    python -m budget bot
 """
 
 import argparse
+import logging
 import os
 import sys
 from datetime import datetime, time
@@ -108,6 +110,43 @@ def _reimburse(args, env, members) -> int:
     return 0
 
 
+def _bot(args, env, members) -> int:
+    from budget.bot import Bot, run
+    from budget.telegram_api import TelegramApi
+
+    token = env.get("TELEGRAM_BOT_TOKEN")
+    if not token:
+        print("TELEGRAM_BOT_TOKEN is not set (see .env.example)", file=sys.stderr)
+        return 2
+    if not any(m.telegram_ids for m in members.members):
+        print("No member Telegram ids: set MEMBER_1_TELEGRAM_ID and MEMBER_2_TELEGRAM_ID in .env",
+              file=sys.stderr)
+        return 2
+    try:
+        rule = SplitRule.parse(env.get("BUDGET_SPLIT"), [m.key for m in members.members])
+    except ValueError as e:
+        print(e, file=sys.stderr)
+        return 2
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    db_path = env.get("BUDGET_DB") or "data/budget.db"
+    os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+    store = Store(db_path)
+    api = TelegramApi(token)
+    bot = Bot(store, members, api, rule, tz_name=env.get("BUDGET_TZ") or DEFAULT_TZ)
+    print("Bot is running; Ctrl+C to stop.")
+    try:
+        run(bot, api)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            bot.flush_all()
+        except Exception:
+            logging.exception("answering the last batch failed")
+        store.close()
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="python -m budget")
     parser.add_argument("--env", default=".env", help="env file (default .env); real env vars win")
@@ -125,13 +164,15 @@ def main(argv=None) -> int:
     reim.add_argument("--date", help="YYYY-MM-DD, default now")
     reim.add_argument("--note", help="optional, e.g. 'bank transfer'")
     reim.add_argument("--currency", default="EUR")
-    for p in (imp, rep, reim):
+    bot = sub.add_parser("bot", help="run the Telegram bot (long polling)")
+    for p in (imp, rep, reim, bot):
         p.add_argument("--env", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
     env = read_env_file(args.env)
     members = Members.from_env(env)
-    command = {"import-export": _import_export, "report": _report, "reimburse": _reimburse}[args.command]
+    command = {"import-export": _import_export, "report": _report, "reimburse": _reimburse,
+               "bot": _bot}[args.command]
     return command(args, env, members)
 
 
