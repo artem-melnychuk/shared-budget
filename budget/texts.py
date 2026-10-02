@@ -11,6 +11,7 @@ from budget.report import MonthReport
 from budget.storage import Expense
 
 CATEGORY_LABELS = {
+    "delivery": "Доставка",
     "groceries": "Продукты",
     "bakery": "Булочная",
     "eating out": "Кафе и рестораны",
@@ -19,7 +20,10 @@ CATEGORY_LABELS = {
     "health": "Здоровье",
     "subscriptions": "Подписки и связь",
     "leisure": "Досуг",
+    "electronics": "Техника",
     "clothes": "Одежда",
+    "beauty": "Красота и уход",
+    "pets": "Животные",
     UNCATEGORIZED: "Прочее",
 }
 CATEGORIES = [*KEYWORDS, UNCATEGORIZED]

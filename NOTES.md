@@ -2,6 +2,14 @@
 
 Decisions made while working, newest first.
 
+## 2026-10-02: more category rules
+
+- `budget/categories.py` now knows the common French chains (Carrefour, Monoprix, Franprix, Lidl, Aldi, Picard, Intermarché, Leclerc, Auchan, Super U, Biocoop, Grand Frais, Casino...), transport (SNCF, TER, Ouigo, Lignes d'Azur, Zou, TotalEnergies, Vinci, Indigo), home (IKEA, Leroy Merlin, EDF...), telecom/streaming, and Russian words, since descriptions may be typed in Russian.
+- New categories: `delivery` (Uber Eats, Deliveroo, Just Eat, `livraison`, `доставка`; split from eating out for the savings block), `electronics` (Fnac, Darty, Boulanger), `beauty`, `pets`. Russian labels in `texts.py`.
+- Matching ignores case and accents and treats punctuation as spaces (`Lignes d’Azur` = `lignes d azur`). Keywords match a word prefix, or the whole word with a leading `=` for short or ambiguous ones (`=bar` ≠ `barbier`, `=boulanger` ≠ `boulangerie`, `=uber` ≠ `uber eats`). Phrases are tried before single words; when words disagree, the category listed first wins (delivery first, so `Deliveroo pizza` is delivery).
+- `livraison` alone counts as delivery even if it was a parcel; correct it on the card.
+- Changed outcome for existing data: `uber eats` / `livraison` used to be "eating out" and are now "delivery".
+
 ## 2026-10-02: paybacks from Telegram
 
 - A text (message, caption, or chat-export entry) is a payback when a payback word comes right before the amount (`remboursé 32`, `вернул долг 15`, `возврат долга: 20`, `remb. 10`, `отдал 5`) or right after it (`32 remboursé`, `32 euros remboursés`). Words: `rembours*`, `remb`, `вернул/вернула/вернули`, `верну`, `возврат*`, `отдал*`, optionally followed by `долг`/`la dette`. Anything after the amount becomes the description.
