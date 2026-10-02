@@ -156,6 +156,8 @@ class Bot:
         self.store.set_amount(e.id, parsed.amount_cents, e.currency)
         if parsed.description and not e.description:
             self.store.set_description(e.id, parsed.description)
+        if parsed.is_reimbursement and not e.is_reimbursement:
+            self.store.mark_reimbursement(e.id, self._other(e.payer))
         e = self.store.get(e.id)
         self.edit(chat_id, card_id, texts.card(e, self.members, self.tz_name), self.card_keyboard(e))
         self.send(chat_id, texts.AMOUNT_SAVED.format(id=e.id, amount=texts.money(e.amount_cents, e.currency)),

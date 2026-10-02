@@ -1,4 +1,7 @@
-"""Quick text expenses: `12.50 boulangerie`, `35 courses`, `boulangerie 4,20€`."""
+"""Quick text expenses: `12.50 boulangerie`, `35 courses`, `boulangerie 4,20€`.
+
+A debt paid back is a text too: `remboursé 32`, `вернул 32`, `32 remboursement`.
+"""
 
 import re
 from dataclasses import dataclass
@@ -19,24 +22,45 @@ _TRAILING = re.compile(
 )
 
 
+# A payback: the word before or right after the amount.
+_PAYBACK_WORD = r"(?:rembours\w*|remb\b\.?|вернул[аи]?|верну\b|возврат\w*|отдал[аи]?)"
+_PAYBACK_FIRST = re.compile(
+    rf"^\s*{_PAYBACK_WORD}(?:\s+(?:долг[аи]?|la dette))?\s*:?\s*(?:€\s*)?{_AMOUNT}\s*{_CURRENCY}?"
+    rf"(?:\s+(?P<desc>.*?))?\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+_PAYBACK_AFTER = re.compile(rf"^{_PAYBACK_WORD}(?:\s+(?:долг[аи]?|la dette))?\s*(?P<rest>.*)$",
+                            re.IGNORECASE | re.DOTALL)
+
+
 @dataclass(frozen=True)
 class TextExpense:
     amount_cents: int
     description: str
+    is_reimbursement: bool = False
+
+
+def _cents(match) -> int:
+    return int(match["int"]) * 100 + int((match["dec"] or "").ljust(2, "0"))
 
 
 def parse_text_expense(text: str | None) -> TextExpense | None:
     """Return the amount and description, or None when the text isn't an expense."""
     if not text:
         return None
+    if match := _PAYBACK_FIRST.match(text):
+        cents = _cents(match)
+        return TextExpense(cents, (match["desc"] or "").strip(), True) if cents > 0 else None
     match = _LEADING.match(text) or _TRAILING.match(text)
     if not match:
         return None
-    dec = match["dec"] or ""
-    cents = int(match["int"]) * 100 + int(dec.ljust(2, "0") or 0)
+    cents = _cents(match)
     if cents <= 0:
         return None
-    return TextExpense(cents, (match["desc"] or "").strip())
+    description = (match["desc"] or "").strip()
+    if match.re is _LEADING and (payback := _PAYBACK_AFTER.match(description)):
+        return TextExpense(cents, payback["rest"].strip(), True)
+    return TextExpense(cents, description)
 
 
 _PLAIN_AMOUNT = re.compile(rf"^\s*(?:€\s*)?{_AMOUNT}\s*{_CURRENCY}?\s*$", re.IGNORECASE)
@@ -47,5 +71,4 @@ def parse_amount(text: str | None) -> int | None:
     match = _PLAIN_AMOUNT.match(text or "")
     if not match:
         return None
-    cents = int(match["int"]) * 100 + int((match["dec"] or "").ljust(2, "0"))
-    return cents or None
+    return _cents(match) or None

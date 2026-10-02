@@ -2,6 +2,14 @@
 
 Decisions made while working, newest first.
 
+## 2026-10-02: paybacks from Telegram
+
+- A text (message, caption, or chat-export entry) is a payback when a payback word comes right before the amount (`remboursé 32`, `вернул долг 15`, `возврат долга: 20`, `remb. 10`, `отдал 5`) or right after it (`32 remboursé`, `32 euros remboursés`). Words: `rembours*`, `remb`, `вернул/вернула/вернули`, `верну`, `возврат*`, `отдал*`, optionally followed by `долг`/`la dette`. Anything after the amount becomes the description.
+- The author (or forwarder, as for expenses) is who paid back; the receiver is the other member. With more than two members `paid_to` stays empty (counted as "without a payer") until chosen on the card.
+- Replying `remboursé 32` to a card both sets the amount and marks the entry a payback (useful for a transfer screenshot).
+- The card button "Это возврат долга" already existed (previous commit) and stays the way to fix a misread.
+- Known ambiguity: `вернул 32` could also mean returning goods to a shop. The card shows "Возврат долга" and "Это не возврат, а трата" flips it back.
+
 ## 2026-10-02: live Telegram bot
 
 `python -m budget bot`: long polling, token from `TELEGRAM_BOT_TOKEN`. Modules: `budget/telegram_api.py` (client), `budget/bot.py` (logic + polling loop), `budget/texts.py` (every string the bot sends, Russian, HTML parse mode).

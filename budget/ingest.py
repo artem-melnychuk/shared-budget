@@ -33,6 +33,9 @@ def to_expense(msg: Incoming, members: Members) -> tuple[Expense | None, str | N
     # Default payer is the author; when the author is someone else (a shop's
     # channel, an unknown person) it's whoever forwarded it. The bot asks later.
     payer = author or sender
+    payback = parsed is not None and parsed.is_reimbursement
+    # A payback goes to the other member; with more than two it waits for a choice.
+    others = [m for m in members.members if payer and m.key != payer.key]
     return Expense(
         source=msg.source,
         chat_id=msg.chat_id,
@@ -45,6 +48,9 @@ def to_expense(msg: Incoming, members: Members) -> tuple[Expense | None, str | N
         sender=sender.key if sender else None,
         forwarded=msg.forwarded,
         payer=payer.key if payer else None,
+        is_shared=not payback,
+        is_reimbursement=payback,
+        paid_to=others[0].key if payback and len(others) == 1 else None,
         amount_cents=parsed.amount_cents if parsed else None,
         description=parsed.description if parsed else None,
         text=msg.text,

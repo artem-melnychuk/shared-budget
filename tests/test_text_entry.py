@@ -29,5 +29,34 @@ class ParseTextExpenseTest(unittest.TestCase):
             self.assertIsNone(parse_text_expense(text), text)
 
 
+class PaybackTextTest(unittest.TestCase):
+    def check(self, text, cents, description=""):
+        parsed = parse_text_expense(text)
+        self.assertIsNotNone(parsed, text)
+        self.assertEqual((parsed.amount_cents, parsed.description, parsed.is_reimbursement),
+                         (cents, description, True), text)
+
+    def test_word_first(self):
+        self.check("remboursé 32", 3200)
+        self.check("Rembourse 32,50 virement", 3250, "virement")
+        self.check("remboursement : 15€", 1500)
+        self.check("remb. 10", 1000)
+        self.check("вернул 32", 3200)
+        self.check("Вернула долг 15,20 €", 1520)
+        self.check("возврат долга: 20", 2000)
+        self.check("отдал 5 наличными", 500, "наличными")
+
+    def test_word_after_amount(self):
+        self.check("32 remboursé", 3200)
+        self.check("32 euros remboursés", 3200)
+        self.check("32 remboursement loyer", 3200, "loyer")
+        self.check("32 вернул", 3200)
+
+    def test_not_a_payback(self):
+        for text in ("remboursé", "вернул книгу", "12.50 boulangerie", "35 courses rembourser plus tard"):
+            parsed = parse_text_expense(text)
+            self.assertFalse(parsed and parsed.is_reimbursement, text)
+
+
 if __name__ == "__main__":
     unittest.main()
