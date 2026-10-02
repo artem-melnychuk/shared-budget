@@ -7,7 +7,9 @@ from zoneinfo import ZoneInfo
 from budget.balance import Balance, SplitRule
 from budget.categories import KEYWORDS, UNCATEGORIZED, category_of
 from budget.members import Members
+from budget import savings as savings_rules
 from budget.report import MonthReport
+from budget.savings import Savings
 from budget.storage import Expense
 
 CATEGORY_LABELS = {
@@ -247,6 +249,35 @@ def report_message(report: MonthReport, members: Members) -> str:
             lines.append(f"{local_date(e.original_date, report.tz_name)} "
                          f"{escape(members.display(e.payer))} → {escape(members.display(e.paid_to))} "
                          f"{m(e.amount_cents)}")
+    lines += ["", "<b>Где можно сэкономить</b>", *savings_lines(report.savings, cur)]
     lines += ["", "<b>Кто кому должен за месяц</b>", *_debts(b, members)]
     lines += ["", "<b>Итого на конец месяца</b>", *_debts(report.running_balance, members)]
     return "\n".join(lines)
+
+
+def _percent(share: float) -> str:
+    return f"{share * 100:.0f}%"
+
+
+def savings_lines(s: Savings | None, currency: str = "EUR") -> list[str]:
+    if s is None or s.empty:
+        return ["Ничего не бросается в глаза."]
+    m = lambda c: money(c, currency)  # noqa: E731
+    lines = []
+    if s.recurring:
+        lines.append(f"🔁 Регулярные платежи (та же сумма тому же продавцу {savings_rules.RECURRING_MONTHS} "
+                     f"мес. подряд) — проверьте, все ли нужны:")
+        lines += [f"• {escape(r.seller)}: {m(r.amount_cents)} в месяц, {m(r.yearly_cents)} в год"
+                  for r in s.recurring]
+    if s.small:
+        lines.append(f"🪙 Частые мелкие траты (от {savings_rules.SMALL_MIN_COUNT} раз до "
+                     f"{m(savings_rules.SMALL_LIMIT_CENTS)}):")
+        lines += [f"• {category_label(x.category)}: {x.count} раз, всего {m(x.total_cents)}" for x in s.small]
+    e = s.eating
+    if e and e.eating_cents:
+        parts = ", ".join(f"{category_label(c).lower()} {m(v)}" for c, v in e.by_category.items() if v)
+        line = f"🍽 Доставка и рестораны: {m(e.eating_cents)} ({parts}) — {_percent(e.share)} всех трат"
+        if e.previous_share is not None:
+            line += f"; в прошлом месяце {_percent(e.previous_share)}"
+        lines.append(line)
+    return lines

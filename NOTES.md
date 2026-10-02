@@ -2,6 +2,24 @@
 
 Decisions made while working, newest first.
 
+## 2026-10-02: "where to save" block in the monthly report
+
+`budget/savings.py`, shown in `python -m budget report` ("Where to save") and in the bot's `/report` ("Где можно сэкономить"). Uses only counted expenses (amount known, not a reimbursement, report currency), shared and personal together.
+
+- **Recurring payments**: same seller and exactly the same amount in each of the last 3 months, ending with the report month. Shows the monthly and yearly cost. Seller = description normalised like categories (`Netflix` = `netflix`). A price change (Spotify 10.99 → 11.99) breaks the streak until three months at the new price; that's on purpose for "the same amount", but see the question below.
+- **Frequent small spending**: at least 8 expenses of up to 10 € in one category in the month, grouped by category (a bakery or café habit shows up even when the shop changes).
+- **Delivery and eating out**: total of the `delivery` and `eating out` categories, their share of the month's counted spending, and the previous month's share for comparison.
+- Nothing found → "nothing stands out" / "Ничего не бросается в глаза."
+
+### Open questions for the owner (2026-10-02)
+
+Defaults chosen so the work could go on; each is a constant in `budget/savings.py`:
+
+1. Recurring: is 3 months in a row right, or should 2 be enough to flag a subscription? Should a small price change (say up to 10 %) still count as the same payment?
+2. Small spending: is "up to 10 €, at least 8 times a month, per category" the right threshold?
+3. Delivery and eating out: compare with the previous month only, or with an average over several months? Is a target share wanted (e.g. warn above 20 %)?
+4. Should the savings block look at shared expenses only, or (as now) shared and personal together?
+
 ## 2026-10-02: CSV export
 
 `python -m budget export --month 2026-10 [--out file.csv|-] [--plain] [--split 60/40]` (`budget/export.py`). Without `--month`, everything.
