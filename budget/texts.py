@@ -41,8 +41,8 @@ BTN_PAYER = "👤 Платит: {name}"
 BTN_SHARED = "👥 Общая → сделать личной"
 BTN_PERSONAL = "🙋 Личная → сделать общей"
 BTN_CATEGORY = "🗂 Категория"
-BTN_REIMBURSEMENT = "↩️ Это возврат долга"
-BTN_NOT_REIMBURSEMENT = "🧾 Это не возврат, а трата"
+BTN_REIMBURSEMENT = "↩️ Это перевод, а не трата"
+BTN_NOT_REIMBURSEMENT = "🧾 Это трата, а не перевод"
 BTN_DELETE = "🗑 Удалить"
 BTN_DELETE_YES = "Да, удалить"
 BTN_BACK = "← Назад"
@@ -63,11 +63,11 @@ HELP = (
     "• Пересылайте мне чеки (фото, PDF, скриншоты) и сообщения вида "
     "<code>12.50 boulangerie</code>; можно сразу пачкой.\n"
     "• На каждую трату я покажу карточку: там можно сменить плательщика, "
-    "сделать трату общей или личной, выбрать категорию, отметить возврат долга или удалить.\n"
+    "сделать трату общей или личной, выбрать категорию, отметить перевод или удалить.\n"
     "• Если у чека нет суммы, ответьте на его карточку суммой, например <code>23,90</code>.\n"
-    "• Вернули долг — напишите <code>вернул 32</code> или <code>remboursé 32</code>: "
-    "это запишется как возврат от вас второму участнику.\n\n"
-    "/balance — кто кому должен\n"
+    "• Перевели деньги друг другу — напишите <code>вернул 32</code> или <code>remboursé 32</code>: "
+    "это запишется как перевод от вас второму участнику и не попадёт в траты.\n\n"
+    "/balance — кто сколько потратил в этом месяце\n"
     "/report — отчёт за текущий месяц, /report 2026-10 — за указанный"
 )
 NOT_AN_EXPENSE = "Не нашёл здесь суммы. Пример траты: <code>12.50 boulangerie</code>. /help — что я умею."
@@ -116,7 +116,7 @@ def card(e: Expense, members: Members, tz_name: str, duplicate: bool = False) ->
     when = local_date(e.original_date, tz_name)
     if e.is_reimbursement:
         lines += [
-            f"↩️ <b>Возврат долга #{e.id}</b>",
+            f"↩️ <b>Перевод #{e.id}</b>",
             f"Сумма: <b>{money(e.amount_cents, e.currency)}</b>",
             f"Дата: {when}",
             f"От кого: {escape(members.display(e.payer))}",
@@ -150,7 +150,7 @@ def deleted(expense_id: int) -> str:
 def summary_line(e: Expense, members: Members, tz_name: str) -> str:
     when = local_date(e.original_date, tz_name)[:5]
     if e.is_reimbursement:
-        what = f"возврат {escape(members.display(e.payer))} → {escape(members.display(e.paid_to))}"
+        what = f"перевод {escape(members.display(e.payer))} → {escape(members.display(e.paid_to))}"
     else:
         what = f"{escape(members.display(e.payer))}, {'общая' if e.is_shared else 'личная'}"
         if e.description:
@@ -187,12 +187,39 @@ def batch_summary(received: int, added: list[Expense], duplicates: list[Expense]
     return "\n".join(lines)
 
 
-def _debts(balance: Balance, members: Members) -> list[str]:
-    if not balance.debts:
-        return ["Все в расчёте 🤝"]
-    return [f"Долг: <b>{escape(members.display(d.debtor))}</b> → <b>{escape(members.display(d.creditor))}</b>, "
-            f"{money(d.amount_cents, balance.currency)}"
-            for d in balance.debts]
+def _plain(cents: int) -> str:
+    """An amount without the currency sign, for table cells: 15,62."""
+    sign = "−" if cents < 0 else ""
+    cents = abs(cents)
+    return f"{sign}{cents // 100},{cents % 100:02d}"
+
+
+def spending_table(report: MonthReport, members: Members) -> list[str]:
+    """Who paid how much: a row per category, a column per member, monospace so it lines up."""
+    b = report.month_balance
+    if not b.counted:
+        return ["В этом месяце трат нет."]
+    keys = list(report.rule.members)
+    rows = [(category_label(c), [line.paid_by[k] for k in keys]) for c, line in report.categories.items()]
+    totals = [
+        ("Итого", [b.members[k].paid for k in keys]),
+        ("  общие", [b.members[k].paid_shared for k in keys]),
+        ("  личные", [b.members[k].paid_personal for k in keys]),
+    ]
+    names = [members.display(k) for k in keys]
+    label_width = max(len(label) for label, _ in rows + totals)
+    widths = [max(len(name), *(len(_plain(values[i])) for _, values in rows + totals))
+              for i, name in enumerate(names)]
+
+    def row(label: str, cells: list[str]) -> str:
+        return "  ".join([label.ljust(label_width), *(c.rjust(w) for c, w in zip(cells, widths))])
+
+    symbol = "€" if b.currency == "EUR" else b.currency
+    table = [row(symbol, names)]
+    table += [row(label, [_plain(v) for v in values]) for label, values in rows]
+    table.append("-" * len(table[0]))
+    table += [row(label, [_plain(v) for v in values]) for label, values in totals]
+    return [f"<pre>{escape(chr(10).join(table))}</pre>"]
 
 
 def _not_counted(balance: Balance) -> list[str]:
@@ -206,14 +233,11 @@ def _not_counted(balance: Balance) -> list[str]:
     return [f"Не учтено — {', '.join(parts)}."] if parts else []
 
 
-def balance_message(balance: Balance, members: Members) -> str:
-    lines = [f"💶 <b>Баланс за всё время</b> (деление {split_label(balance.rule)})", ""]
-    lines += _debts(balance, members)
-    lines += ["", f"Общих трат: {money(balance.shared_total, balance.currency)}"]
-    for key, t in balance.members.items():
-        lines.append(f"{escape(members.display(key))}: оплачено общих {money(t.paid_shared, balance.currency)}, "
-                     f"доля {money(t.share, balance.currency)}")
-    not_counted = _not_counted(balance)
+def balance_message(report: MonthReport, members: Members) -> str:
+    """/balance: the month's spending table, nothing else."""
+    lines = [f"💶 <b>Кто сколько потратил: {month_name(report.month)}</b>", ""]
+    lines += spending_table(report, members)
+    not_counted = _not_counted(report.month_balance)
     if not_counted:
         lines += ["", *not_counted]
     return "\n".join(lines)
@@ -224,34 +248,22 @@ def report_message(report: MonthReport, members: Members) -> str:
     cur = b.currency
     m = lambda c: money(c, cur)  # noqa: E731
     lines = [
-        f"📊 <b>Отчёт: {month_name(report.month)}</b> (деление {split_label(report.rule)})",
+        f"📊 <b>Отчёт: {month_name(report.month)}</b>",
         "",
         f"Учтено трат: {len(b.counted)} на {m(b.shared_total + b.personal_total)} "
         f"(общие {m(b.shared_total)}, личные {m(b.personal_total)})",
         *_not_counted(b),
         "",
-        "<b>По участникам</b>",
+        "<b>Кто сколько потратил</b>",
+        *spending_table(report, members),
     ]
-    for key, t in b.members.items():
-        name = escape(members.display(key))
-        lines.append(f"👤 {name}: оплачено {m(t.paid)} (общее {m(t.paid_shared)}, личное {m(t.paid_personal)}); "
-                     f"доля в общих {m(t.share)}; расходы {m(t.spent)}")
-    lines += ["", "<b>По категориям</b>"]
-    if report.categories:
-        for key, line in report.categories.items():
-            per_member = " · ".join(f"{escape(members.display(k))} {m(line.spent_by[k])}" for k in report.rule.members)
-            lines.append(f"{category_label(key)} — {m(line.total)} ({per_member})")
-    else:
-        lines.append("В этом месяце трат нет.")
     if b.reimbursements:
-        lines += ["", "<b>Возвраты долга</b>"]
+        lines += ["", "<b>Переводы друг другу</b>"]
         for e in b.reimbursements:
             lines.append(f"{local_date(e.original_date, report.tz_name)} "
                          f"{escape(members.display(e.payer))} → {escape(members.display(e.paid_to))} "
                          f"{m(e.amount_cents)}")
     lines += ["", "<b>Где можно сэкономить</b>", *savings_lines(report.savings, cur)]
-    lines += ["", "<b>Кто кому должен за месяц</b>", *_debts(b, members)]
-    lines += ["", "<b>Итого на конец месяца</b>", *_debts(report.running_balance, members)]
     return "\n".join(lines)
 
 

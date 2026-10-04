@@ -2,6 +2,16 @@
 
 Decisions made while working, newest first.
 
+## 2026-10-04: the bot shows who spent what, never who owes whom
+
+Owner's call after the first live run: no "Долг: X → Y" lines and no debt wording anywhere in the bot.
+
+- `/report` and `/balance` show a monospace table (`texts.spending_table`): a row per category, a column per member with what that member actually **paid** (`CategoryLine.paid_by`), then `Итого` and its `общие` / `личные` split. The old per-category numbers were 50/50 shares, so a 15,62 € receipt Artem paid read "Artem 7,81 · Ksenia 7,81"; `spent_by` (shares) is kept for the CSV export.
+- `/balance` is now the current month's table, not an all-time debt balance. "Current month" comes from `Bot.today` (local date in `BUDGET_TZ`), which tests fix.
+- The split rule, shares and debts still exist in `balance.py`, the CLI report and the CSV export; the bot just doesn't show them. The "(деление 50/50)" header is gone with them.
+- Reimbursements are called "перевод" in the bot (card, buttons, help, report section "Переводы друг другу"); the logic is unchanged: a transfer between the two is not spending. The text triggers (`вернул 32`, `remboursé 32`) stay.
+- The table has no "total" column so it stays about 32 characters wide and fits a phone screen without wrapping; the month's grand total is in the "Учтено трат" line above it.
+
 ## 2026-10-02: "where to save" block in the monthly report
 
 `budget/savings.py`, shown in `python -m budget report` ("Where to save") and in the bot's `/report` ("Где можно сэкономить"). Uses only counted expenses (amount known, not a reimbursement, report currency), shared and personal together.

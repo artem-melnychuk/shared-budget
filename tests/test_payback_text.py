@@ -62,13 +62,13 @@ class BotTest(BotTestCase):
     def test_payback_card(self):
         self.feed(update(1, sender=SAM, text="вернул 32"))
         card = self.api.sent()[-1]["text"]
-        self.assertIn("Возврат долга", card)
+        self.assertIn("Перевод #", card)
         self.assertIn("От кого: Sam Example", card)
         self.assertIn("Кому: Alex Example", card)
 
     def test_payback_in_a_batch_summary(self):
         self.feed(update(1, sender=SAM, text="вернул 32"), update(2, sender=SAM, text="5 café"))
-        self.assertIn("возврат Sam Example → Alex Example", self.api.sent()[-1]["text"])
+        self.assertIn("перевод Sam Example → Alex Example", self.api.sent()[-1]["text"])
 
     def test_reply_to_a_card_can_mark_a_payback(self):
         e, card_id = self.card_for(update(10, photo=photo_sizes("transfer-2")))

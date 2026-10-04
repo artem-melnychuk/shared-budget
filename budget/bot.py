@@ -13,7 +13,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from budget import texts
-from budget.balance import SplitRule, compute_balance
+from budget.balance import SplitRule
 from budget.categories import category_of
 from budget.ingest import ingest_update
 from budget.members import Members
@@ -25,7 +25,7 @@ from budget.text_entry import parse_text_expense
 log = logging.getLogger(__name__)
 
 COMMANDS = [
-    {"command": "balance", "description": "Кто кому должен"},
+    {"command": "balance", "description": "Кто сколько потратил в этом месяце"},
     {"command": "report", "description": "Отчёт за месяц: /report 2026-10"},
     {"command": "help", "description": "Что умеет бот"},
 ]
@@ -45,13 +45,15 @@ class Batch:
 class Bot:
     def __init__(self, store: Store, members: Members, api, rule: SplitRule,
                  tz_name: str = DEFAULT_TZ, clock=time.monotonic, debounce: float = 2.0,
-                 list_limit: int = 30):
+                 list_limit: int = 30, today=None):
         self.store = store
         self.members = members
         self.api = api
         self.rule = rule
         self.tz_name = tz_name
         self.clock = clock
+        # Local date in the budget's time zone; tests pass a fixed one.
+        self.today = today or (lambda: datetime.now(ZoneInfo(self.tz_name)).date())
         self.debounce = debounce
         self.list_limit = list_limit
         self.pending: dict[tuple[int, int], Batch] = {}
@@ -167,12 +169,11 @@ class Bot:
         name, *args = text.split()
         name = name.split("@", 1)[0].lower()
         if name == "/balance":
-            balance = compute_balance(self.store.all(), self.rule)
-            self.send(chat_id, texts.balance_message(balance, self.members))
+            report = build_report(self.store, self.today().replace(day=1), self.rule, tz_name=self.tz_name)
+            self.send(chat_id, texts.balance_message(report, self.members))
         elif name == "/report":
             try:
-                month = parse_month(args[0]) if args else \
-                    datetime.now(ZoneInfo(self.tz_name)).date().replace(day=1)
+                month = parse_month(args[0]) if args else self.today().replace(day=1)
             except ValueError:
                 self.send(chat_id, texts.BAD_MONTH)
                 return

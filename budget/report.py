@@ -35,6 +35,7 @@ class CategoryLine:
     shared: int = 0
     personal: int = 0
     spent_by: dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    paid_by: dict[str, int] = field(default_factory=lambda: defaultdict(int))  # who actually paid
 
     @property
     def total(self) -> int:
@@ -64,6 +65,7 @@ def build_report(store: Store, month: date, rule: SplitRule,
     categories: dict[str, CategoryLine] = defaultdict(CategoryLine)
     for e in month_balance.counted:
         line = categories[category_of(e)]
+        line.paid_by[e.payer] += e.amount_cents
         if e.is_shared:
             line.shared += e.amount_cents
             for k, part in rule.shares(e.amount_cents).items():

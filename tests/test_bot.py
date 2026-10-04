@@ -1,10 +1,12 @@
+import html
 import io
 import json
 import os
+import re
 import unittest
 import urllib.error
 from contextlib import redirect_stdout
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from unittest import mock
 
 from budget import texts
@@ -17,6 +19,12 @@ from tests.fakes import (ALEX, ALEX_ID, ENV, SAM, STRANGER_ID, from_hidden,
                          from_user, members, photo_sizes, update, user)
 
 KEYS = ["alex", "sam"]
+
+
+def table_rows(text):
+    """Cells of the monospace table in a bot message, split on runs of 2+ spaces."""
+    pre = re.search(r"<pre>(.*?)</pre>", text, re.S).group(1)
+    return [re.split(r"\s{2,}", line.strip()) for line in html.unescape(pre).splitlines()]
 
 
 class FakeApi:
@@ -277,7 +285,7 @@ class ButtonsTest(BotTestCase):
         card = self.press(f"r:{self.e.id}")
         e = self.store.get(self.e.id)
         self.assertEqual((e.is_reimbursement, e.payer, e.paid_to), (True, "sam", "alex"))
-        self.assertIn("Возврат долга", card["text"])
+        self.assertIn(f"Перевод #{self.e.id}", card["text"])
         self.assertIn(texts.BTN_NOT_REIMBURSEMENT, [b["text"] for b in buttons(card)])
         # Swapping the payer of a reimbursement keeps it between two people.
         self.press(f"P:{self.e.id}:0")
@@ -320,23 +328,46 @@ class CommandsTest(BotTestCase):
         self.feed(update(1, text="100 courses", date=1791021600),        # 2026-10-03
                   update(2, sender=SAM, text="40 resto", date=1791453600))  # 2026-10-08
         self.store.add_reimbursement("sam", "alex", 1000, datetime(2026, 10, 9, 12, tzinfo=timezone.utc))
+        self.bot.today = lambda: date(2026, 10, 15)
         self.api.calls.clear()
 
     def text_of(self, command, sender=ALEX):
         self.feed(update(90, sender=sender, text=command), flush=False)
         return self.api.sent()[-1]["text"]
 
-    def test_balance(self):
+    def assert_no_debt_wording(self, text):
+        for word in ("Долг", "долг", "должен", "доля", "деление"):
+            self.assertNotIn(word, text)
+
+    def test_balance_is_this_months_spending_table(self):
         text = self.text_of("/balance")
-        self.assertIn("деление 50/50", text)
-        self.assertIn("Долг: <b>Sam Example</b> → <b>Alex Example</b>, 20,00 €", text)
+        self.assertIn("Кто сколько потратил: октябрь 2026", text)
+        rows = table_rows(text)
+        self.assertEqual(rows[0], ["€", "Alex Example", "Sam Example"])
+        # Who actually paid, not a 50/50 share; the payback is not spending.
+        self.assertIn(["Продукты", "100,00", "0,00"], rows)
+        self.assertIn(["Итого", "100,00", "40,00"], rows)
+        self.assertIn(["общие", "100,00", "40,00"], rows)
+        self.assertIn(["личные", "0,00", "0,00"], rows)
+        self.assert_no_debt_wording(text)
+
+    def test_balance_counts_only_the_current_month(self):
+        self.bot.today = lambda: date(2026, 11, 2)
+        text = self.text_of("/balance")
+        self.assertIn("ноябрь 2026", text)
+        self.assertIn("В этом месяце трат нет.", text)
 
     def test_report(self):
         text = self.text_of("/report 2026-10")
         self.assertIn("Отчёт: октябрь 2026", text)
-        self.assertIn("Продукты — 100,00 €", text)
-        self.assertIn("Возвраты долга", text)
+        self.assertIn("Кто сколько потратил", text)
+        self.assertIn(["Продукты", "100,00", "0,00"], table_rows(text))
+        self.assertIn("Переводы друг другу", text)
         self.assertIn("09.10.2026 Sam Example → Alex Example 10,00 €", text)
+        self.assert_no_debt_wording(text)
+
+    def test_report_defaults_to_the_current_month(self):
+        self.assertIn("Отчёт: октябрь 2026", self.text_of("/report"))
 
     def test_report_with_bot_name_and_bad_month(self):
         self.assertIn("Отчёт: октябрь 2026", self.text_of("/report@budget_bot 2026-10"))
