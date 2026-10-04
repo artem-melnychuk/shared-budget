@@ -64,16 +64,23 @@ HELP = (
     "<code>12.50 boulangerie</code>; можно сразу пачкой.\n"
     "• На каждую трату я покажу карточку: там можно сменить плательщика, "
     "сделать трату общей или личной, выбрать категорию, отметить перевод или удалить.\n"
-    "• Если у чека нет суммы, ответьте на его карточку суммой, например <code>23,90</code>.\n"
+    "• Если у чека нет суммы, пришлите её следующим сообщением, например <code>23,90</code>.\n"
+    "• Дату пишите в конце: <code>12.50 boulangerie 01.10</code>, <code>5 café вчера</code>. "
+    "Без даты трата записывается днём сообщения.\n"
     "• Перевели деньги друг другу — напишите <code>вернул 32</code> или <code>remboursé 32</code>: "
     "это запишется как перевод от вас второму участнику и не попадёт в траты.\n\n"
     "/balance — кто сколько потратил в этом месяце\n"
-    "/report — отчёт за текущий месяц, /report 2026-10 — за указанный"
+    "/report — отчёт за текущий месяц, /report 2026-10 — за указанный, "
+    "/report 2026-08 2026-10 — за несколько месяцев"
 )
 NOT_AN_EXPENSE = "Не нашёл здесь суммы. Пример траты: <code>12.50 boulangerie</code>. /help — что я умею."
 AMOUNT_SAVED = "✅ Сумма {amount} сохранена для #{id}."
-NOT_AN_AMOUNT = "Не понял сумму. Ответьте на карточку числом, например <code>23,90</code>."
-BAD_MONTH = "Месяц пишется так: <code>/report 2026-10</code>."
+DATE_SAVED = "✅ Дата {date} сохранена для #{id}."
+AMOUNT_AND_DATE_SAVED = "✅ Сумма {amount} и дата {date} сохранены для #{id}."
+NOT_AN_AMOUNT = ("Не понял. Ответьте на карточку суммой (<code>23,90</code>), суммой с датой "
+                 "(<code>23,90 01.10</code>) или только датой (<code>01/10</code>, <code>вчера</code>).")
+BAD_MONTH = ("Месяц пишется так: <code>/report 2026-10</code>, "
+             "несколько месяцев: <code>/report 2026-08 2026-10</code>.")
 DELETED = "🗑 Трата #{id} удалена."
 DELETE_CONFIRM = "\n\n<b>Удалить эту трату?</b>"
 CHOOSE_PAYER = "\n\n<b>Кто платил?</b>"
@@ -97,6 +104,16 @@ def local_date(iso_utc: str, tz_name: str) -> str:
 
 def month_name(month: date) -> str:
     return f"{MONTHS[month.month - 1]} {month.year}"
+
+
+def period_name(report: MonthReport) -> str:
+    """`октябрь 2026`, `август – октябрь 2026`, `декабрь 2025 – февраль 2026`."""
+    first, last = report.month, report.last_month or report.month
+    if first == last:
+        return month_name(first)
+    if first.year == last.year:
+        return f"{MONTHS[first.month - 1]} – {month_name(last)}"
+    return f"{month_name(first)} – {month_name(last)}"
 
 
 def category_label(key: str) -> str:
@@ -137,9 +154,11 @@ def card(e: Expense, members: Members, tz_name: str, duplicate: bool = False) ->
         lines.append(f"Описание: {escape(e.description)}")
     lines.append(f"Источник: {KIND_LABELS.get(e.kind, e.kind)}")
     if e.amount_cents is None:
-        lines += ["", "✍️ Ответьте на это сообщение суммой, например <code>23,90</code>."]
+        lines += ["", "✍️ Пришлите сумму следующим сообщением, например <code>23,90</code>. "
+                      "Можно с датой: <code>23,90 01.10</code>."]
     else:
-        lines += ["", "<i>Чтобы исправить сумму, ответьте на это сообщение.</i>"]
+        lines += ["", "<i>Чтобы исправить сумму или дату, ответьте на эту карточку: "
+                      "<code>23,90</code>, <code>23,90 01.10</code> или <code>01/10</code>.</i>"]
     return "\n".join(lines)
 
 
@@ -194,11 +213,32 @@ def _plain(cents: int) -> str:
     return f"{sign}{cents // 100},{cents % 100:02d}"
 
 
+def _table(corner: str, names: list[str], rows: list[tuple[str, list[int]]],
+           totals: list[tuple[str, list[int]]]) -> str:
+    """A monospace table: a column per member, body rows, a rule, total rows."""
+    label_width = max(len(corner), *(len(label) for label, _ in rows + totals))
+    widths = [max(len(name), *(len(_plain(values[i])) for _, values in rows + totals))
+              for i, name in enumerate(names)]
+
+    def row(label: str, cells: list[str]) -> str:
+        return "  ".join([label.ljust(label_width), *(c.rjust(w) for c, w in zip(cells, widths))])
+
+    lines = [row(corner, names)]
+    lines += [row(label, [_plain(v) for v in values]) for label, values in rows]
+    lines.append("-" * len(lines[0]))
+    lines += [row(label, [_plain(v) for v in values]) for label, values in totals]
+    return f"<pre>{escape(chr(10).join(lines))}</pre>"
+
+
+def _symbol(currency: str) -> str:
+    return "€" if currency == "EUR" else currency
+
+
 def spending_table(report: MonthReport, members: Members) -> list[str]:
     """Who paid how much: a row per category, a column per member, monospace so it lines up."""
     b = report.month_balance
     if not b.counted:
-        return ["В этом месяце трат нет."]
+        return ["За этот период трат нет." if report.is_range else "В этом месяце трат нет."]
     keys = list(report.rule.members)
     rows = [(category_label(c), [line.paid_by[k] for k in keys]) for c, line in report.categories.items()]
     totals = [
@@ -206,31 +246,39 @@ def spending_table(report: MonthReport, members: Members) -> list[str]:
         ("  общие", [b.members[k].paid_shared for k in keys]),
         ("  личные", [b.members[k].paid_personal for k in keys]),
     ]
-    names = [members.display(k) for k in keys]
-    label_width = max(len(label) for label, _ in rows + totals)
-    widths = [max(len(name), *(len(_plain(values[i])) for _, values in rows + totals))
-              for i, name in enumerate(names)]
+    return [_table(_symbol(b.currency), [members.display(k) for k in keys], rows, totals)]
 
-    def row(label: str, cells: list[str]) -> str:
-        return "  ".join([label.ljust(label_width), *(c.rjust(w) for c, w in zip(cells, widths))])
 
-    symbol = "€" if b.currency == "EUR" else b.currency
-    table = [row(symbol, names)]
-    table += [row(label, [_plain(v) for v in values]) for label, values in rows]
-    table.append("-" * len(table[0]))
-    table += [row(label, [_plain(v) for v in values]) for label, values in totals]
-    return [f"<pre>{escape(chr(10).join(table))}</pre>"]
+def month_table(report: MonthReport, members: Members) -> list[str]:
+    """For a range: who paid how much in each month, empty months included."""
+    b = report.month_balance
+    keys = list(report.rule.members)
+    rows = [(month_name(m), [report.paid_by_month.get(m, {}).get(k, 0) for k in keys]) for m in report.months]
+    totals = [("Итого", [b.members[k].paid for k in keys])]
+    return [_table(_symbol(b.currency), [members.display(k) for k in keys], rows, totals)]
+
+
+def _ids(expenses: list[Expense], limit: int = 10) -> str:
+    shown = ", ".join(f"#{e.id}" for e in expenses[:limit])
+    return shown + (f" и ещё {len(expenses) - limit}" if len(expenses) > limit else "")
+
+
+def not_counted_expenses(balance: Balance) -> list[Expense]:
+    """What the table leaves out and someone should fix; the bot adds a button for each."""
+    return balance.without_amount + balance.without_payer + balance.other_currency
 
 
 def _not_counted(balance: Balance) -> list[str]:
-    parts = []
+    lines = []
     if balance.without_amount:
-        parts.append(f"без суммы: {len(balance.without_amount)}")
+        lines.append(f"⚠️ Не попали в таблицу, нет суммы: {_ids(balance.without_amount)}. "
+                     "Откройте карточку и ответьте на неё суммой.")
     if balance.without_payer:
-        parts.append(f"без плательщика: {len(balance.without_payer)}")
+        lines.append(f"⚠️ Не попали в таблицу, не выбран плательщик: {_ids(balance.without_payer)}. "
+                     "Откройте карточку и выберите, кто платил.")
     if balance.other_currency:
-        parts.append(f"в другой валюте: {len(balance.other_currency)}")
-    return [f"Не учтено — {', '.join(parts)}."] if parts else []
+        lines.append(f"⚠️ Не попали в таблицу, другая валюта: {_ids(balance.other_currency)}.")
+    return lines
 
 
 def balance_message(report: MonthReport, members: Members) -> str:
@@ -248,7 +296,7 @@ def report_message(report: MonthReport, members: Members) -> str:
     cur = b.currency
     m = lambda c: money(c, cur)  # noqa: E731
     lines = [
-        f"📊 <b>Отчёт: {month_name(report.month)}</b>",
+        f"📊 <b>Отчёт: {period_name(report)}</b>",
         "",
         f"Учтено трат: {len(b.counted)} на {m(b.shared_total + b.personal_total)} "
         f"(общие {m(b.shared_total)}, личные {m(b.personal_total)})",
@@ -257,13 +305,16 @@ def report_message(report: MonthReport, members: Members) -> str:
         "<b>Кто сколько потратил</b>",
         *spending_table(report, members),
     ]
+    if report.is_range and b.counted:
+        lines += ["", "<b>По месяцам</b>", *month_table(report, members)]
     if b.reimbursements:
         lines += ["", "<b>Переводы друг другу</b>"]
         for e in b.reimbursements:
             lines.append(f"{local_date(e.original_date, report.tz_name)} "
                          f"{escape(members.display(e.payer))} → {escape(members.display(e.paid_to))} "
                          f"{m(e.amount_cents)}")
-    lines += ["", "<b>Где можно сэкономить</b>", *savings_lines(report.savings, cur)]
+    if not report.is_range:  # the savings block compares one month with the month before
+        lines += ["", "<b>Где можно сэкономить</b>", *savings_lines(report.savings, cur)]
     return "\n".join(lines)
 
 

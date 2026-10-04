@@ -15,12 +15,12 @@ from zoneinfo import ZoneInfo
 from budget import texts
 from budget.balance import SplitRule
 from budget.categories import category_of
-from budget.ingest import ingest_update
+from budget.ingest import ingest_update, on_day
 from budget.members import Members
-from budget.report import DEFAULT_TZ, build_report, parse_month
-from budget.storage import Expense, Store
+from budget.report import DEFAULT_TZ, build_report, parse_period
+from budget.storage import Expense, Store, iso
 from budget.telegram_api import TelegramError
-from budget.text_entry import parse_text_expense
+from budget.text_entry import parse_date_only, parse_text_expense
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ class Batch:
 class Bot:
     def __init__(self, store: Store, members: Members, api, rule: SplitRule,
                  tz_name: str = DEFAULT_TZ, clock=time.monotonic, debounce: float = 2.0,
-                 list_limit: int = 30, today=None):
+                 list_limit: int = 30, today=None, awaiting_for: float = 1800):
         self.store = store
         self.members = members
         self.api = api
@@ -57,6 +57,10 @@ class Bot:
         self.debounce = debounce
         self.list_limit = list_limit
         self.pending: dict[tuple[int, int], Batch] = {}
+        # chat id -> (expense id, clock) of the last card shown without an amount: a bare
+        # amount sent next in that chat fills it in instead of becoming a new expense.
+        self.awaiting: dict[int, tuple[int, float]] = {}
+        self.awaiting_for = awaiting_for
 
     # --- sending -------------------------------------------------------------
 
@@ -82,6 +86,14 @@ class Bot:
         sent = self.send(chat_id, texts.card(e, self.members, self.tz_name, duplicate),
                          self.card_keyboard(e), reply_to)
         self.store.add_card(chat_id, sent["message_id"], e.id)
+        if e.amount_cents is None and not e.is_reimbursement:
+            self.awaiting[chat_id] = (e.id, self.clock())
+
+    def open_keyboard(self, expenses: list[Expense]) -> list[list[dict]] | None:
+        """Two "#id · amount" buttons per row; each sends that expense's card."""
+        buttons = [_button(texts.BTN_OPEN.format(id=e.id, amount=texts.money(e.amount_cents, e.currency)),
+                           f"o:{e.id}") for e in expenses[:self.list_limit]]
+        return [buttons[i:i + 2] for i in range(0, len(buttons), 2)] or None
 
     # --- keyboards -----------------------------------------------------------
 
@@ -134,8 +146,10 @@ class Bot:
         if text and text.startswith("/") and "forward_origin" not in message:
             self.command(chat_id, text)
             return
+        if text and "forward_origin" not in message and self.fill_awaiting(chat_id, message["message_id"], text):
+            return
 
-        result = ingest_update(self.store, self.members, update)
+        result = ingest_update(self.store, self.members, update, tz_name=self.tz_name)
         key = (chat_id, message["from"]["id"])
         batch = self.pending.get(key)
         if batch is None:
@@ -150,35 +164,74 @@ class Bot:
         else:
             batch.skipped[result.reason] += 1
 
-    def amount_reply(self, chat_id: int, message_id: int, card_id: int, e: Expense, text: str):
-        parsed = parse_text_expense(text)
-        if parsed is None:
+    def fill_awaiting(self, chat_id: int, message_id: int, text: str) -> bool:
+        """A bare amount (optionally with a date) right after a card that asked for one.
+
+        Returns True when it went into that expense. Anything with a description
+        (`12 café`) is a new expense, as before.
+        """
+        waiting = self.awaiting.get(chat_id)
+        if waiting is None:
+            return False
+        expense_id, since = waiting
+        e = self.store.get(expense_id)
+        if self.clock() - since > self.awaiting_for or e is None or e.amount_cents is not None:
+            del self.awaiting[chat_id]
+            return False
+        parsed = parse_text_expense(text, self.today())
+        if parsed is None or parsed.description or parsed.is_reimbursement:
+            return False
+        self.amount_reply(chat_id, message_id, self.store.last_card(chat_id, e.id), e, text)
+        return True
+
+    def amount_reply(self, chat_id: int, message_id: int, card_id: int | None, e: Expense, text: str):
+        """A reply to a card: an amount, an amount and a date, or only a date."""
+        day = parse_date_only(text, self.today())
+        parsed = None if day else parse_text_expense(text, self.today())
+        if day is None and parsed is None:
             self.send(chat_id, texts.NOT_AN_AMOUNT, reply_to=message_id)
             return
-        self.store.set_amount(e.id, parsed.amount_cents, e.currency)
-        if parsed.description and not e.description:
-            self.store.set_description(e.id, parsed.description)
-        if parsed.is_reimbursement and not e.is_reimbursement:
-            self.store.mark_reimbursement(e.id, self._other(e.payer))
+        if parsed is not None:
+            self.store.set_amount(e.id, parsed.amount_cents, e.currency)
+            if parsed.description and not e.description:
+                self.store.set_description(e.id, parsed.description)
+            if parsed.is_reimbursement and not e.is_reimbursement:
+                self.store.mark_reimbursement(e.id, self._other(e.payer))
+            day = parsed.day
+        if day is not None:
+            when = on_day(datetime.fromisoformat(e.original_date), day, self.tz_name)
+            self.store.set_date(e.id, iso(when))
+        if self.awaiting.get(chat_id, (None,))[0] == e.id:
+            del self.awaiting[chat_id]
         e = self.store.get(e.id)
-        self.edit(chat_id, card_id, texts.card(e, self.members, self.tz_name), self.card_keyboard(e))
-        self.send(chat_id, texts.AMOUNT_SAVED.format(id=e.id, amount=texts.money(e.amount_cents, e.currency)),
-                  reply_to=message_id)
+        if card_id is not None:
+            self.edit(chat_id, card_id, texts.card(e, self.members, self.tz_name), self.card_keyboard(e))
+        amount = texts.money(e.amount_cents, e.currency)
+        date_text = texts.local_date(e.original_date, self.tz_name)
+        if parsed is None:
+            confirmation = texts.DATE_SAVED.format(id=e.id, date=date_text)
+        elif day is None:
+            confirmation = texts.AMOUNT_SAVED.format(id=e.id, amount=amount)
+        else:
+            confirmation = texts.AMOUNT_AND_DATE_SAVED.format(id=e.id, amount=amount, date=date_text)
+        self.send(chat_id, confirmation, reply_to=message_id)
 
     def command(self, chat_id: int, text: str):
         name, *args = text.split()
         name = name.split("@", 1)[0].lower()
         if name == "/balance":
             report = build_report(self.store, self.today().replace(day=1), self.rule, tz_name=self.tz_name)
-            self.send(chat_id, texts.balance_message(report, self.members))
+            self.send(chat_id, texts.balance_message(report, self.members),
+                      self.open_keyboard(texts.not_counted_expenses(report.month_balance)))
         elif name == "/report":
             try:
-                month = parse_month(args[0]) if args else self.today().replace(day=1)
+                first, last = parse_period(args) if args else (self.today().replace(day=1),) * 2
             except ValueError:
                 self.send(chat_id, texts.BAD_MONTH)
                 return
-            report = build_report(self.store, month, self.rule, tz_name=self.tz_name)
-            self.send(chat_id, texts.report_message(report, self.members))
+            report = build_report(self.store, first, self.rule, tz_name=self.tz_name, last_month=last)
+            self.send(chat_id, texts.report_message(report, self.members),
+                      self.open_keyboard(texts.not_counted_expenses(report.month_balance)))
         else:
             self.send(chat_id, texts.HELP)
 
@@ -213,10 +266,7 @@ class Bot:
         text = texts.batch_summary(batch.received, added, duplicates, dict(batch.skipped),
                                    self.members, self.tz_name, self.list_limit)
         listed = (added[:self.list_limit] + duplicates[:self.list_limit])
-        buttons = [_button(texts.BTN_OPEN.format(id=e.id, amount=texts.money(e.amount_cents, e.currency)),
-                           f"o:{e.id}") for e in listed]
-        keyboard = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
-        self.send(batch.chat_id, text, keyboard or None, reply_to=batch.first_message_id)
+        self.send(batch.chat_id, text, self.open_keyboard(listed), reply_to=batch.first_message_id)
 
     # --- buttons -------------------------------------------------------------
 

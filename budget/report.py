@@ -22,6 +22,24 @@ def parse_month(text: str) -> date:
         raise ValueError(f"month {text!r} must look like 2026-10") from None
 
 
+def parse_period(args: list[str]) -> tuple[date, date]:
+    """`2026-10` -> one month; `2026-08 2026-10` or `2026-08..2026-10` -> a range, either order."""
+    parts = " ".join(args).replace("..", " ").split()
+    if len(parts) not in (1, 2):
+        raise ValueError("a period is one month or two: 2026-08 2026-10")
+    months = sorted(parse_month(p) for p in parts)
+    return months[0], months[-1]
+
+
+def months_between(first: date, last: date) -> list[date]:
+    """Every month from `first` to `last`, both included."""
+    months, m = [], first.replace(day=1)
+    while m <= last:
+        months.append(m)
+        m = date(m.year + m.month // 12, m.month % 12 + 1, 1)
+    return months
+
+
 def month_bounds(month: date, tz_name: str = DEFAULT_TZ) -> tuple[datetime, datetime]:
     """Start and end of a calendar month in local time, as UTC datetimes."""
     tz = ZoneInfo(tz_name)
@@ -50,20 +68,41 @@ class MonthReport:
     categories: dict[str, CategoryLine]
     tz_name: str = DEFAULT_TZ
     savings: Savings | None = None
+    last_month: date | None = None       # set for a report over several months
+    paid_by_month: dict[date, dict[str, int]] = field(default_factory=dict)
 
     @property
     def rule(self) -> SplitRule:
         return self.month_balance.rule
 
+    @property
+    def is_range(self) -> bool:
+        return self.last_month is not None and self.last_month != self.month
+
+    @property
+    def months(self) -> list[date]:
+        return months_between(self.month, self.last_month or self.month)
+
 
 def build_report(store: Store, month: date, rule: SplitRule,
-                 tz_name: str = DEFAULT_TZ, currency: str = "EUR") -> MonthReport:
-    start, end = month_bounds(month, tz_name)
+                 tz_name: str = DEFAULT_TZ, currency: str = "EUR",
+                 last_month: date | None = None) -> MonthReport:
+    """One month, or every month from `month` to `last_month` together.
+
+    `month_balance` then covers the whole period. The "where to save" block is
+    about one month (it compares with the month before), so a range has none.
+    """
+    last = last_month or month
+    start, end = month_bounds(month, tz_name)[0], month_bounds(last, tz_name)[1]
     month_balance = compute_balance(store.between(start, end), rule, currency)
     running = compute_balance(store.between(EPOCH, end), rule, currency)
 
+    tz = ZoneInfo(tz_name)
     categories: dict[str, CategoryLine] = defaultdict(CategoryLine)
+    paid_by_month: dict[date, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for e in month_balance.counted:
+        local_month = datetime.fromisoformat(e.original_date).astimezone(tz).date().replace(day=1)
+        paid_by_month[local_month][e.payer] += e.amount_cents
         line = categories[category_of(e)]
         line.paid_by[e.payer] += e.amount_cents
         if e.is_shared:
@@ -74,8 +113,9 @@ def build_report(store: Store, month: date, rule: SplitRule,
             line.personal += e.amount_cents
             line.spent_by[e.payer] += e.amount_cents
     ordered = dict(sorted(categories.items(), key=lambda kv: (-kv[1].total, kv[0])))
-    savings = analyze(store, month, rule, tz_name, currency)
-    return MonthReport(month, month_balance, running, ordered, tz_name, savings)
+    savings = analyze(store, month, rule, tz_name, currency) if last == month else None
+    return MonthReport(month, month_balance, running, ordered, tz_name, savings,
+                       last_month=last, paid_by_month=dict(paid_by_month))
 
 
 def money(cents: int, currency: str = "EUR") -> str:

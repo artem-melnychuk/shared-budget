@@ -2,6 +2,17 @@
 
 Decisions made while working, newest first.
 
+## 2026-10-04: dates in the text, reports over several months, amounts after a receipt
+
+Found in the first live run: the owner sent a receipt photo, the bot asked for the amount, and he typed `15.62` as a new message instead of a Telegram reply to the card. It became a second expense and the receipt stayed without an amount.
+
+- **Bare amount after a card that asks for one** (`Bot.fill_awaiting`): the last card shown without an amount waits per chat for 30 minutes (`awaiting_for`); the next plain text that is only an amount (a date may follow) fills that expense instead of becoming a new one. Text with a description (`12 café`), forwards and replies keep their old meaning. The wait lives in memory, so a restarted bot forgets it; opening a card with the button again re-arms it. Known limit: in a future group chat the wait is per chat, not per person.
+- **Date at the end of a text** (`text_entry.parse_text_expense(text, sent)`): `dd.mm`, `dd/mm`, either with a year (`01.10.2025`, `01/10/25`), or `вчера` / `позавчера` / `hier` / `avant-hier`. Read only when what comes before it is an expense on its own, so a bare `12.10` stays 12,10 €; an impossible date (`31.02`) stays part of the description. Without a year the date is never in the future: `28.12` sent on 3 January means last December. Works for texts, captions, forwards and chat exports (it applies in `ingest.to_expense`).
+- **The date replaces the day and keeps the message's time of day** (`ingest.on_day`). Two separate `5 café 01.10` messages therefore stay two expenses in the author+date+amount dedup, while the same message forwarded twice still matches itself.
+- **Replies to a card**: an amount, an amount and a date (`23,90 01.10`), or only a date that can't be an amount (`01/10`, `01.10.2026`, `вчера`); `01.10` alone still means 1,10 €.
+- **`/report 2026-08 2026-10`** (also `2026-08..2026-10`, either order): one table for the period plus a "По месяцам" table with every month, empty ones included. No "where to save" block for a range, since it compares one month with the month before. `build_report(..., last_month=)`; `month_balance` then covers the whole period.
+- **Left-out expenses**: `/balance` and `/report` name them (`нет суммы: #1`) and add an open button per expense instead of the old "Не учтено — без суммы: 1".
+
 ## 2026-10-04: the bot shows who spent what, never who owes whom
 
 Owner's call after the first live run: no "Долг: X → Y" lines and no debt wording anywhere in the bot.

@@ -21,10 +21,15 @@ from tests.fakes import (ALEX, ALEX_ID, ENV, SAM, STRANGER_ID, from_hidden,
 KEYS = ["alex", "sam"]
 
 
-def table_rows(text):
-    """Cells of the monospace table in a bot message, split on runs of 2+ spaces."""
-    pre = re.search(r"<pre>(.*?)</pre>", text, re.S).group(1)
+def table_rows(text, n=0):
+    """Cells of the n-th monospace table in a bot message, split on runs of 2+ spaces."""
+    pre = re.findall(r"<pre>(.*?)</pre>", text, re.S)[n]
     return [re.split(r"\s{2,}", line.strip()) for line in html.unescape(pre).splitlines()]
+
+
+def epoch(*args):
+    """Unix time of a UTC moment, for message dates."""
+    return int(datetime(*args, tzinfo=timezone.utc).timestamp())
 
 
 class FakeApi:
@@ -105,7 +110,7 @@ class SingleMessageTest(BotTestCase):
         self.assertEqual(card["reply_parameters"]["message_id"], 10)
         self.assertEqual(card["parse_mode"], "HTML")
         self.assertIn("без суммы", card["text"])
-        self.assertIn("Ответьте на это сообщение суммой", card["text"])
+        self.assertIn("Пришлите сумму следующим сообщением", card["text"])
         self.assertIn("Sam Example", card["text"])
         self.assertIn("14.03.2026", card["text"])
         data = [b["callback_data"] for b in buttons(card)]
@@ -236,6 +241,82 @@ class AmountReplyTest(BotTestCase):
             "editMessageText: Bad Request: message is not modified", 400)
         self.feed(self.reply("12.50", card_id), flush=False)
         self.assertIn("12,50 €", self.api.sent()[-1]["text"])
+
+    # The fixture photo was sent on 2026-04-14 at 10:15 UTC (12:15 in Nice).
+
+    def test_amount_and_date_by_reply(self):
+        self.bot.today = lambda: date(2026, 4, 14)
+        e, card_id = self.card_for(update(10, photo=photo_sizes("rcpt-A")))
+        self.feed(self.reply("23,90 01.04", card_id), flush=False)
+        e = self.store.get(e.id)
+        self.assertEqual((e.amount_cents, e.original_date), (2390, "2026-04-01T10:15:00+00:00"))
+        self.assertIn("01.04.2026", self.api.sent("editMessageText")[-1]["text"])
+        self.assertEqual(self.api.sent()[-1]["text"],
+                         texts.AMOUNT_AND_DATE_SAVED.format(id=e.id, amount="23,90 €", date="01.04.2026"))
+
+    def test_date_only_by_reply(self):
+        self.bot.today = lambda: date(2026, 4, 14)
+        e, card_id = self.card_for(update(10, text="12.50 boulangerie"))
+        self.feed(self.reply("10/04", card_id), flush=False)
+        e = self.store.get(e.id)
+        self.assertEqual((e.amount_cents, e.original_date), (1250, "2026-04-10T10:15:00+00:00"))
+        self.assertEqual(self.api.sent()[-1]["text"], texts.DATE_SAVED.format(id=e.id, date="10.04.2026"))
+
+
+class AwaitingAmountTest(BotTestCase):
+    """After a card asks for an amount, a bare amount sent next fills it in."""
+
+    def test_bare_amount_fills_the_receipt(self):
+        e, card_id = self.card_for(update(10, photo=photo_sizes("rcpt-A")))
+        self.feed(update(11, text="15.62"))
+        self.assertEqual([x.id for x in self.store.all()], [e.id])
+        self.assertEqual(self.store.get(e.id).amount_cents, 1562)
+        self.assertEqual(self.api.sent("editMessageText")[-1]["message_id"], card_id)
+        self.assertEqual(self.api.sent()[-1]["text"], texts.AMOUNT_SAVED.format(id=e.id, amount="15,62 €"))
+        # Only once: the next bare amount is a new expense again.
+        self.feed(update(12, text="3"))
+        self.assertEqual(len(self.store.all()), 2)
+
+    def test_amount_with_a_description_is_a_new_expense(self):
+        e, _ = self.card_for(update(10, photo=photo_sizes("rcpt-A")))
+        self.feed(update(11, text="12 café"))
+        self.assertEqual(len(self.store.all()), 2)
+        self.assertIsNone(self.store.get(e.id).amount_cents)
+
+    def test_waiting_expires(self):
+        e, _ = self.card_for(update(10, photo=photo_sizes("rcpt-A")))
+        self.clock.now += 1801
+        self.feed(update(11, text="15.62"))
+        self.assertEqual(len(self.store.all()), 2)
+        self.assertIsNone(self.store.get(e.id).amount_cents)
+
+    def test_a_forwarded_amount_is_not_taken(self):
+        e, _ = self.card_for(update(10, photo=photo_sizes("rcpt-A")))
+        self.feed(update(11, origin=from_user(SAM), text="15.62"))
+        self.assertEqual(len(self.store.all()), 2)
+
+
+class TextDateTest(BotTestCase):
+    """A date at the end of a text moves the expense to that day, same time of day."""
+
+    def test_text_with_a_date(self):
+        self.feed(update(30, text="12.50 boulangerie 01.10", date=epoch(2026, 10, 4, 12)))
+        [e] = self.store.all()
+        self.assertEqual((e.amount_cents, e.description, e.original_date),
+                         (1250, "boulangerie", "2026-10-01T12:00:00+00:00"))
+        self.assertIn("Дата: 01.10.2026", self.api.sent()[-1]["text"])
+
+    def test_two_messages_naming_the_same_day_stay_two_expenses(self):
+        self.feed(update(31, text="5 café 01.10", date=epoch(2026, 10, 4, 9)))
+        self.feed(update(32, text="5 café 01.10", date=epoch(2026, 10, 4, 17)))
+        self.assertEqual(len(self.store.all()), 2)
+
+    def test_the_same_message_forwarded_twice_is_one_expense(self):
+        origin = from_user(SAM, date=epoch(2026, 10, 4, 9))
+        self.feed(update(33, origin=origin, text="5 café вчера"))
+        self.feed(update(34, origin=origin, text="5 café вчера"))
+        [e] = self.store.all()
+        self.assertEqual(e.original_date, "2026-10-03T09:00:00+00:00")
 
 
 class ButtonsTest(BotTestCase):
@@ -368,6 +449,33 @@ class CommandsTest(BotTestCase):
 
     def test_report_defaults_to_the_current_month(self):
         self.assertIn("Отчёт: октябрь 2026", self.text_of("/report"))
+
+    def test_report_over_several_months(self):
+        self.feed(update(3, text="30 courses", date=epoch(2026, 8, 5, 10)))
+        for command in ("/report 2026-08 2026-10", "/report 2026-10 2026-08", "/report 2026-08..2026-10"):
+            text = self.text_of(command)
+            self.assertIn("Отчёт: август – октябрь 2026", text, command)
+            self.assertIn(["Продукты", "130,00", "0,00"], table_rows(text, 0))
+            by_month = table_rows(text, 1)
+            self.assertIn(["август 2026", "30,00", "0,00"], by_month)
+            self.assertIn(["сентябрь 2026", "0,00", "0,00"], by_month)
+            self.assertIn(["октябрь 2026", "100,00", "40,00"], by_month)
+            self.assertIn(["Итого", "130,00", "40,00"], by_month)
+            self.assertNotIn("Где можно сэкономить", text)
+
+    def test_report_across_years(self):
+        self.assertIn("Отчёт: декабрь 2025 – октябрь 2026", self.text_of("/report 2025-12 2026-10"))
+
+    def test_bad_period(self):
+        for command in ("/report 2026-08 x", "/report 2026-08 2026-09 2026-10"):
+            self.assertEqual(self.text_of(command), texts.BAD_MONTH, command)
+
+    def test_expenses_left_out_get_their_ids_and_open_buttons(self):
+        e, _ = self.card_for(update(4, photo=photo_sizes("rcpt-Z"), date=epoch(2026, 10, 10, 10)))
+        self.feed(update(90, text="/balance"), flush=False)
+        message = self.api.sent()[-1]
+        self.assertIn(f"нет суммы: #{e.id}", message["text"])
+        self.assertIn(f"o:{e.id}", [b["callback_data"] for b in buttons(message)])
 
     def test_report_with_bot_name_and_bad_month(self):
         self.assertIn("Отчёт: октябрь 2026", self.text_of("/report@budget_bot 2026-10"))

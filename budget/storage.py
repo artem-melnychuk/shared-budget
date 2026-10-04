@@ -222,6 +222,17 @@ class Store:
             "SELECT e.* FROM cards c JOIN expenses e ON e.id = c.expense_id"
             " WHERE c.chat_id = ? AND c.message_id = ?", (chat_id, message_id)).fetchone())
 
+    def last_card(self, chat_id: int, expense_id: int) -> int | None:
+        """Message id of the newest card shown for this expense in this chat."""
+        row = self.db.execute("SELECT MAX(message_id) FROM cards WHERE chat_id = ? AND expense_id = ?",
+                              (chat_id, expense_id)).fetchone()
+        return row[0] if row else None
+
+    def set_date(self, expense_id: int, original_date: str):
+        """`original_date` is ISO 8601 UTC, like everything stored."""
+        self.db.execute("UPDATE expenses SET original_date = ? WHERE id = ?", (original_date, expense_id))
+        self.db.commit()
+
     def set_description(self, expense_id: int, description: str | None):
         self.db.execute("UPDATE expenses SET description = ? WHERE id = ?", (description, expense_id))
         self.db.commit()
