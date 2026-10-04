@@ -2,6 +2,19 @@
 
 Decisions made while working, newest first.
 
+## 2026-10-04: receipts are read by Gemini (free tier), through a queue
+
+Owner's choice (option B of three): the Gemini API free tier, accepting that Google may use free-tier content to improve its products, over a local model on the home PC, which is often switched off. The bot will move to free 24/7 hosting next; recognition was built first and works in the current polling bot.
+
+- **Queue in the database**: a photo or document sent through Telegram is stored with `recognition = 'pending'` (not text, not a transfer, not chat-export files, which live on someone's disk). Rows stored before this change were queued by the migration. `Recognizer.process_one` reads the oldest one; the polling loop calls `Bot.recognize_next` after each poll and polls every second while something is due.
+- **Download again from Telegram** by `file_id` (`TelegramApi.download`, up to 20 MB). Nothing is written to disk: photos stay on Telegram's servers.
+- **Gemini `generateContent`** with `responseJsonSchema` (`budget/gemini.py`), standard library only, key in the `x-goog-api-key` header so no error can show it. `models.generateContent` is still supported next to the newer Interactions API, and its response shape is documented, so it was preferred. Default model `gemini-3.5-flash-lite` (cheapest, largest free quota); `GEMINI_MODEL=gemini-3.8-flash` reads more accurately. The system prompt spells out French receipt wording: which line is the total, what is not an item, dates as DD/MM/YYYY.
+- **Checking the answer** (`parse_receipt`): a total of 0 or less means unreadable; a date in the future or more than 400 days back is a misreading and the message date stays; currency must be a 3-letter code; card digits must be exactly 4. Items whose sum is off the total by more than 2 cents are kept, and the message says something was read inaccurately.
+- **What people typed wins**: the amount is filled only when empty (if it differs, the message shows the receipt's total and how to take it); the description only when empty. The receipt's date replaces the message's day, keeping the time of day, as with dates typed in a text.
+- **Failures**: quota (429 with `retryDelay`), overload, network and garbled answers are retried, pausing the whole queue with backoff from 30 s up to an hour; after 5 attempts, or at once for a lasting error (400, file too big), the receipt becomes `failed` and the card asks for the amount, as before.
+- `python -m budget read-receipt photo.jpg [--model ...]` reads one local file and prints the answer, to try models on real receipts without touching the database.
+- Line items go to a new `items` table (name, quantity, amount, negative for a discount), deleted with their expense.
+
 ## 2026-10-04: a late button press must not freeze the card
 
 Live run: pressing "Категория" did nothing; the log showed `answerCallbackQuery: Bad Request: query is too old`. The handler answered the press first and edited the card second, so a refused answer raised and the menu never opened. `Bot.answer_callback` now logs a refused answer as a warning and carries on. Why the press arrived late is not known: a request to api.telegram.org from the same machine took 0.2 s, and only one bot process was running. `TelegramApi.call` now warns about any call more than 3 s slower than expected (`getUpdates` included, beyond its long-poll timeout), so the next delay shows where the time goes.

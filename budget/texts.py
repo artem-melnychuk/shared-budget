@@ -10,7 +10,7 @@ from budget.members import Members
 from budget import savings as savings_rules
 from budget.report import MonthReport
 from budget.savings import Savings
-from budget.storage import Expense
+from budget.storage import Expense, Item
 
 CATEGORY_LABELS = {
     "delivery": "Доставка",
@@ -128,7 +128,9 @@ def split_label(rule: SplitRule) -> str:
     return rule.describe()
 
 
-def card(e: Expense, members: Members, tz_name: str, duplicate: bool = False) -> str:
+def card(e: Expense, members: Members, tz_name: str, duplicate: bool = False,
+         items: list[Item] | None = None, reading: bool = False) -> str:
+    """`items`: lines read off the receipt; `reading`: the bot reads receipts by itself."""
     lines = [ALREADY_SAVED, ""] if duplicate else []
     when = local_date(e.original_date, tz_name)
     if e.is_reimbursement:
@@ -153,7 +155,17 @@ def card(e: Expense, members: Members, tz_name: str, duplicate: bool = False) ->
     if e.description:
         lines.append(f"Описание: {escape(e.description)}")
     lines.append(f"Источник: {KIND_LABELS.get(e.kind, e.kind)}")
-    if e.amount_cents is None:
+    if items:
+        lines.append(f"Товаров на чеке: {len(items)}")
+    if e.card_last4:
+        lines.append(f"Карта: •••• {escape(e.card_last4)}")
+    if e.amount_cents is None and e.recognition == "pending" and reading:
+        lines += ["", "⏳ Читаю чек, сумма появится сама. Можно не ждать и прислать её следующим "
+                      "сообщением, например <code>23,90</code>."]
+    elif e.amount_cents is None and e.recognition == "failed":
+        lines += ["", "⚠️ Не получилось прочитать чек. Пришлите сумму следующим сообщением, "
+                      "например <code>23,90</code>. Можно с датой: <code>23,90 01.10</code>."]
+    elif e.amount_cents is None:
         lines += ["", "✍️ Пришлите сумму следующим сообщением, например <code>23,90</code>. "
                       "Можно с датой: <code>23,90 01.10</code>."]
     else:
@@ -164,6 +176,37 @@ def card(e: Expense, members: Members, tz_name: str, duplicate: bool = False) ->
 
 def deleted(expense_id: int) -> str:
     return DELETED.format(id=expense_id)
+
+
+ITEMS_SHOWN = 25
+
+
+def recognized(outcome, items: list[Item], members: Members, tz_name: str) -> str:
+    """What was read off a receipt: shop, date, total, the lines, and anything to check."""
+    e, r = outcome.expense, outcome.receipt
+    facts = [escape(e.description) if e.description else None, local_date(e.original_date, tz_name),
+             money(r.total_cents, r.currency)]
+    lines = [f"🧾 <b>Прочитал чек #{e.id}</b>: " + ", ".join(f for f in facts if f) + "."]
+    if items:
+        lines.append("")
+        lines += [f"• {escape(i.name)} — {money(i.amount_cents, r.currency)}" for i in items[:ITEMS_SHOWN]]
+        if len(items) > ITEMS_SHOWN:
+            lines.append(f"…и ещё {len(items) - ITEMS_SHOWN}")
+        if not r.items_match:
+            lines += ["", f"⚠️ Товары в сумме дают {money(r.items_total, r.currency)}, а итог на чеке "
+                          f"{money(r.total_cents, r.currency)}: что-то прочитано неточно."]
+    if outcome.total_differs:
+        lines += ["", f"На чеке {money(r.total_cents, r.currency)}, а у вас записано "
+                      f"{money(e.amount_cents, e.currency)}. Оставил вашу сумму. Чтобы взять сумму с чека, "
+                      f"ответьте на карточку: <code>{_plain(r.total_cents)}</code>."]
+    return "\n".join(lines)
+
+
+def recognition_failed(e: Expense) -> str:
+    if e.amount_cents is not None:
+        return f"⚠️ Не получилось прочитать чек #{e.id}. Сумма осталась та, что вы прислали."
+    return (f"⚠️ Не получилось прочитать чек #{e.id}. Пришлите сумму следующим сообщением, "
+            "например <code>23,90</code>.")
 
 
 def summary_line(e: Expense, members: Members, tz_name: str) -> str:

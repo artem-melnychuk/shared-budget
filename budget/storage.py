@@ -42,6 +42,10 @@ CREATE TABLE IF NOT EXISTS expenses (
     file_path       TEXT,
     file_name       TEXT,
     mime_type       TEXT,
+    recognition     TEXT,                       -- receipt reading: 'pending' | 'done' | 'failed'; NULL = not a receipt to read
+    recognition_attempts INTEGER NOT NULL DEFAULT 0,
+    recognition_error TEXT,
+    card_last4      TEXT,                       -- payment card digits printed on the receipt
     UNIQUE (source, chat_id, message_id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS expenses_file_unique_id
@@ -60,7 +64,20 @@ CREATE TABLE IF NOT EXISTS cards (
     expense_id  INTEGER NOT NULL REFERENCES expenses (id) ON DELETE CASCADE,
     PRIMARY KEY (chat_id, message_id)
 );
+
+-- Lines read off a receipt, to compare prices of the same product later.
+CREATE TABLE IF NOT EXISTS items (
+    id           INTEGER PRIMARY KEY,
+    expense_id   INTEGER NOT NULL REFERENCES expenses (id) ON DELETE CASCADE,
+    position     INTEGER NOT NULL,
+    name         TEXT    NOT NULL,
+    quantity     REAL,
+    amount_cents INTEGER NOT NULL               -- what the line cost; negative for a discount
+);
+CREATE INDEX IF NOT EXISTS items_expense ON items (expense_id);
 """
+
+RECEIPT_KINDS = ("photo", "document")
 
 
 def iso(dt: datetime) -> str:
@@ -95,8 +112,19 @@ class Expense:
     file_path: str | None = None
     file_name: str | None = None
     mime_type: str | None = None
+    recognition: str | None = None
+    recognition_attempts: int = 0
+    recognition_error: str | None = None
+    card_last4: str | None = None
     received_at: str | None = None
     id: int | None = None
+
+
+@dataclass(frozen=True)
+class Item:
+    name: str
+    amount_cents: int
+    quantity: float | None = None
 
 
 _COLUMNS = [f.name for f in fields(Expense) if f.name != "id"]
@@ -117,10 +145,20 @@ class Store:
             "category": "TEXT",
             "is_reimbursement": "INTEGER NOT NULL DEFAULT 0",
             "paid_to": "TEXT",
+            "recognition": "TEXT",
+            "recognition_attempts": "INTEGER NOT NULL DEFAULT 0",
+            "recognition_error": "TEXT",
+            "card_last4": "TEXT",
         }
         for column, definition in added.items():
             if existing and column not in existing:
                 self.db.execute(f"ALTER TABLE expenses ADD COLUMN {column} {definition}")
+        if existing and "recognition" not in existing:
+            # Receipts stored before recognition existed get read too.
+            self.db.execute(
+                "UPDATE expenses SET recognition = 'pending' WHERE source = 'telegram'"
+                f" AND kind IN {RECEIPT_KINDS} AND file_id IS NOT NULL AND is_reimbursement = 0")
+            self.db.commit()
 
     def close(self):
         self.db.close()
@@ -259,3 +297,37 @@ class Store:
         self.db.execute("UPDATE expenses SET is_shared = ? WHERE id = ?",
                         (int(is_shared), expense_id))
         self.db.commit()
+
+    # --- receipt recognition ---------------------------------------------------
+
+    def next_pending(self) -> Expense | None:
+        """The oldest receipt still waiting to be read."""
+        return self._expense(self.db.execute(
+            "SELECT * FROM expenses WHERE recognition = 'pending' ORDER BY id LIMIT 1").fetchone())
+
+    def has_pending_recognition(self) -> bool:
+        return self.db.execute("SELECT 1 FROM expenses WHERE recognition = 'pending' LIMIT 1").fetchone() is not None
+
+    def set_recognition(self, expense_id: int, status: str | None, error: str | None = None,
+                        attempts: int | None = None):
+        self.db.execute(
+            "UPDATE expenses SET recognition = ?, recognition_error = ?,"
+            " recognition_attempts = COALESCE(?, recognition_attempts) WHERE id = ?",
+            (status, error, attempts, expense_id))
+        self.db.commit()
+
+    def set_card_last4(self, expense_id: int, card_last4: str | None):
+        self.db.execute("UPDATE expenses SET card_last4 = ? WHERE id = ?", (card_last4, expense_id))
+        self.db.commit()
+
+    def replace_items(self, expense_id: int, items: list[Item]):
+        self.db.execute("DELETE FROM items WHERE expense_id = ?", (expense_id,))
+        self.db.executemany(
+            "INSERT INTO items (expense_id, position, name, quantity, amount_cents) VALUES (?, ?, ?, ?, ?)",
+            [(expense_id, i, it.name, it.quantity, it.amount_cents) for i, it in enumerate(items)])
+        self.db.commit()
+
+    def items(self, expense_id: int) -> list[Item]:
+        rows = self.db.execute(
+            "SELECT name, amount_cents, quantity FROM items WHERE expense_id = ? ORDER BY position", (expense_id,))
+        return [Item(r["name"], r["amount_cents"], r["quantity"]) for r in rows]

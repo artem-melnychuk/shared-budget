@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from budget.chat_export import DEFAULT_TZ, parse_export
 from budget.incoming import Incoming
 from budget.members import Members
-from budget.storage import Expense, Store, iso
+from budget.storage import RECEIPT_KINDS, Expense, Store, iso
 from budget.telegram_update import parse_update
 from budget.text_entry import parse_text_expense
 
@@ -77,6 +77,9 @@ def to_expense(msg: Incoming, members: Members,
         file_path=msg.file_path,
         file_name=msg.file_name,
         mime_type=msg.mime_type,
+        # Photos and PDFs sent through Telegram can be downloaded again and read;
+        # chat-export files live on someone's disk, so they stay manual for now.
+        recognition="pending" if (msg.kind in RECEIPT_KINDS and msg.file_id and not payback) else None,
     ), None
 
 

@@ -11,6 +11,7 @@ import urllib.error
 import urllib.request
 
 API_URL = "https://api.telegram.org/bot{token}/{method}"
+FILE_URL = "https://api.telegram.org/file/bot{token}/{path}"
 SLOW_SECONDS = 3   # a call this much slower than expected gets a warning in the log
 
 log = logging.getLogger(__name__)
@@ -66,3 +67,16 @@ class TelegramApi:
             raise TelegramError(f"{method}: {payload.get('description', 'error')}",
                                 payload.get("error_code"), params_.get("retry_after"))
         return payload["result"]
+
+    def download(self, file_id: str) -> bytes:
+        """The bytes of a file the bot has seen (up to 20 MB). Errors never include the URL."""
+        path = self.call("getFile", file_id=file_id)["file_path"]
+        try:
+            with urllib.request.urlopen(FILE_URL.format(token=self._token, path=path),
+                                        timeout=self.timeout * 6) as response:
+                return response.read()
+        except urllib.error.HTTPError as e:
+            raise TelegramError(f"download: HTTP {e.code}", e.code) from None
+        except (urllib.error.URLError, OSError) as e:
+            reason = getattr(e, "reason", e)
+            raise TelegramError(f"download: network error: {type(e).__name__}: {reason}") from None

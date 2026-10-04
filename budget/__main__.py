@@ -5,6 +5,7 @@
     python -m budget reimburse --from sam --to alex --amount 32.00 [--date 2026-10-31]
     python -m budget bot
     python -m budget export --month 2026-10 [--out file.csv] [--plain]
+    python -m budget read-receipt photo.jpg [--model gemini-3.8-flash]
 """
 
 import argparse
@@ -129,11 +130,21 @@ def _bot(args, env, members) -> int:
         print(e, file=sys.stderr)
         return 2
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    tz_name = env.get("BUDGET_TZ") or DEFAULT_TZ
     db_path = env.get("BUDGET_DB") or "data/budget.db"
     os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
     store = Store(db_path)
     api = TelegramApi(token)
-    bot = Bot(store, members, api, rule, tz_name=env.get("BUDGET_TZ") or DEFAULT_TZ)
+    recognizer = None
+    if env.get("GEMINI_API_KEY"):
+        from budget.gemini import DEFAULT_MODEL, Gemini
+        from budget.recognize import Recognizer
+        model = env.get("GEMINI_MODEL") or DEFAULT_MODEL
+        recognizer = Recognizer(store, api, Gemini(env["GEMINI_API_KEY"], model), tz_name)
+        print(f"Receipts are read by {model}.")
+    else:
+        print("Receipts are not read: GEMINI_API_KEY is not set, amounts are typed by hand.")
+    bot = Bot(store, members, api, rule, tz_name=tz_name, recognizer=recognizer)
     print("Bot is running; Ctrl+C to stop.")
     try:
         run(bot, api)
@@ -180,6 +191,38 @@ def _export(args, env, members) -> int:
     return 0
 
 
+def _read_receipt(args, env, members) -> int:
+    """Read one receipt file and print what the model saw; touches no database."""
+    import json
+    import mimetypes
+
+    from budget.gemini import DEFAULT_MODEL, Gemini, GeminiError
+    from budget.recognize import parse_receipt
+
+    key = env.get("GEMINI_API_KEY")
+    if not key:
+        print("GEMINI_API_KEY is not set (see .env.example)", file=sys.stderr)
+        return 2
+    mime = mimetypes.guess_type(args.file)[0] or "image/jpeg"
+    with open(args.file, "rb") as f:
+        data = f.read()
+    model = args.model or env.get("GEMINI_MODEL") or DEFAULT_MODEL
+    try:
+        raw = Gemini(key, model).read_receipt(data, mime)
+    except GeminiError as e:
+        print(e, file=sys.stderr)
+        return 1
+    today = datetime.now(ZoneInfo(env.get("BUDGET_TZ") or DEFAULT_TZ)).date()
+    r = parse_receipt(raw, today)
+    print(f"model: {model}")
+    print(json.dumps(raw, ensure_ascii=False, indent=2))
+    if r.is_receipt:
+        total = f"{r.total_cents / 100:.2f}" if r.total_cents is not None else "?"
+        print(f"\ntotal {total} {r.currency}, items add up to {r.items_total / 100:.2f}"
+              f" ({'match' if r.items_match else 'MISMATCH'}), date {r.day or '?'}")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="python -m budget")
     parser.add_argument("--env", default=".env", help="env file (default .env); real env vars win")
@@ -204,14 +247,17 @@ def main(argv=None) -> int:
     exp.add_argument("--plain", action="store_true",
                      help="',' separator and decimal point (Power BI, pandas) instead of Excel FR style")
     exp.add_argument("--split", help="weights for the share_* columns, e.g. 60/40")
-    for p in (imp, rep, reim, bot, exp):
+    rr = sub.add_parser("read-receipt", help="read one receipt image or PDF with Gemini and print the result")
+    rr.add_argument("file")
+    rr.add_argument("--model", help="Gemini model code; default GEMINI_MODEL or " + "gemini-3.5-flash-lite")
+    for p in (imp, rep, reim, bot, exp, rr):
         p.add_argument("--env", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
     env = read_env_file(args.env)
     members = Members.from_env(env)
     command = {"import-export": _import_export, "report": _report, "reimburse": _reimburse,
-               "bot": _bot, "export": _export}[args.command]
+               "bot": _bot, "export": _export, "read-receipt": _read_receipt}[args.command]
     return command(args, env, members)
 
 

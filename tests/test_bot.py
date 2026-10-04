@@ -13,6 +13,8 @@ from budget import texts
 from budget.__main__ import main
 from budget.balance import SplitRule
 from budget.bot import Bot, run
+from budget.gemini import GeminiError
+from budget.recognize import Recognizer
 from budget.storage import Store
 from budget.telegram_api import TelegramApi, TelegramError
 from tests.fakes import (ALEX, ALEX_ID, ENV, SAM, STRANGER_ID, from_hidden,
@@ -634,6 +636,61 @@ class BotCliTest(unittest.TestCase):
         code, err = self.run_cli({"TELEGRAM_BOT_TOKEN": "123:fake"})
         self.assertEqual(code, 2)
         self.assertIn("MEMBER_1_TELEGRAM_ID", err)
+
+
+class ReceiptReadingTest(BotTestCase):
+    """The bot with a recognizer: a photo is queued, read, and its card updated."""
+
+    def setUp(self):
+        super().setUp()
+        from tests.test_recognize import ANSWER, FakeReader, FakeTelegram
+        self.reader = FakeReader([ANSWER])
+        self.bot.recognizer = Recognizer(self.store, FakeTelegram(), self.reader, clock=self.clock,
+                                         today=lambda: date(2026, 10, 4))
+
+    def photo(self, message_id=10, **content):
+        return update(message_id, photo=photo_sizes(f"rcpt-{message_id}"), date=epoch(2026, 10, 4, 10), **content)
+
+    def test_a_photo_is_read_and_its_card_updated(self):
+        e, card_id = self.card_for(self.photo())
+        self.assertIn("Читаю чек", self.api.sent()[-1]["text"])
+        self.assertTrue(self.bot.has_work())
+        self.bot.recognize_next()
+        e = self.store.get(e.id)
+        self.assertEqual((e.amount_cents, e.description, e.recognition), (1562, "Supermarché Exemple", "done"))
+        edit = self.api.sent("editMessageText")[-1]
+        self.assertEqual(edit["message_id"], card_id)
+        self.assertIn("Сумма: <b>15,62 €</b>", edit["text"])
+        self.assertIn("Товаров на чеке: 4", edit["text"])
+        self.assertIn("Карта: •••• 1234", edit["text"])
+        notice = self.api.sent()[-1]
+        self.assertIn(f"Прочитал чек #{e.id}", notice["text"])
+        self.assertIn("• FRAISES 500G — 6,90 €", notice["text"])
+        self.assertEqual(notice["reply_parameters"]["message_id"], card_id)
+        self.assertNotIn(ALEX_ID, self.bot.awaiting)
+        self.assertFalse(self.bot.has_work())
+
+    def test_an_unreadable_receipt_asks_for_the_amount(self):
+        self.reader.answers = [GeminiError("Gemini 400: bad image")]
+        e, _ = self.card_for(self.photo())
+        with self.assertLogs("budget.recognize", "WARNING"):
+            self.bot.recognize_next()
+        self.assertIn("Не получилось прочитать чек", self.api.sent("editMessageText")[-1]["text"])
+        self.assertEqual(self.api.sent()[-1]["text"], texts.recognition_failed(self.store.get(e.id)))
+        self.feed(update(11, text="15.62"))
+        self.assertEqual(self.store.get(e.id).amount_cents, 1562)
+
+    def test_an_amount_typed_before_reading_is_kept(self):
+        e, _ = self.card_for(self.photo())
+        self.feed(update(11, text="15.00"))
+        self.bot.recognize_next()
+        self.assertEqual(self.store.get(e.id).amount_cents, 1500)
+        self.assertIn("Оставил вашу сумму", self.api.sent()[-1]["text"])
+
+    def test_only_receipts_are_queued(self):
+        self.feed(self.photo(10), update(11, text="5 café"), self.photo(12, caption="вернул 32"))
+        self.assertEqual([e.recognition for e in sorted(self.store.all(), key=lambda e: e.message_id)],
+                         ["pending", None, None])
 
 
 if __name__ == "__main__":

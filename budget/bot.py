@@ -45,8 +45,9 @@ class Batch:
 class Bot:
     def __init__(self, store: Store, members: Members, api, rule: SplitRule,
                  tz_name: str = DEFAULT_TZ, clock=time.monotonic, debounce: float = 2.0,
-                 list_limit: int = 30, today=None, awaiting_for: float = 1800):
+                 list_limit: int = 30, today=None, awaiting_for: float = 1800, recognizer=None):
         self.store = store
+        self.recognizer = recognizer       # budget.recognize.Recognizer, or None: amounts typed by hand
         self.members = members
         self.api = api
         self.rule = rule
@@ -82,9 +83,13 @@ class Bot:
             if not e.not_modified:
                 raise
 
+    def card_text(self, e: Expense, duplicate: bool = False) -> str:
+        items = self.store.items(e.id) if e.recognition == "done" else None
+        return texts.card(e, self.members, self.tz_name, duplicate, items=items,
+                          reading=self.recognizer is not None)
+
     def send_card(self, chat_id: int, e: Expense, reply_to: int | None = None, duplicate: bool = False):
-        sent = self.send(chat_id, texts.card(e, self.members, self.tz_name, duplicate),
-                         self.card_keyboard(e), reply_to)
+        sent = self.send(chat_id, self.card_text(e, duplicate), self.card_keyboard(e), reply_to)
         self.store.add_card(chat_id, sent["message_id"], e.id)
         if e.amount_cents is None and not e.is_reimbursement:
             self.awaiting[chat_id] = (e.id, self.clock())
@@ -205,7 +210,7 @@ class Bot:
             del self.awaiting[chat_id]
         e = self.store.get(e.id)
         if card_id is not None:
-            self.edit(chat_id, card_id, texts.card(e, self.members, self.tz_name), self.card_keyboard(e))
+            self.edit(chat_id, card_id, self.card_text(e), self.card_keyboard(e))
         amount = texts.money(e.amount_cents, e.currency)
         date_text = texts.local_date(e.original_date, self.tz_name)
         if parsed is None:
@@ -239,6 +244,36 @@ class Bot:
 
     def has_pending(self) -> bool:
         return bool(self.pending)
+
+    def has_work(self) -> bool:
+        """Something to do soon: a batch to answer or a receipt to read."""
+        return self.has_pending() or (self.recognizer is not None and self.recognizer.due())
+
+    # --- receipts ------------------------------------------------------------
+
+    def recognize_next(self):
+        """Read one queued receipt, then update its card and say what was read."""
+        if self.recognizer is None or not self.recognizer.due():
+            return
+        outcome = self.recognizer.process_one()
+        if outcome is None or outcome.status == "retry":
+            return
+        e = outcome.expense
+        if e.chat_id is None:
+            return
+        card_id = self.store.last_card(e.chat_id, e.id)
+        if card_id is not None:
+            self.edit(e.chat_id, card_id, self.card_text(e), self.card_keyboard(e))
+        if outcome.status == "done":
+            text = texts.recognized(outcome, self.store.items(e.id), self.members, self.tz_name)
+            if self.awaiting.get(e.chat_id, (None,))[0] == e.id and e.amount_cents is not None:
+                del self.awaiting[e.chat_id]
+        else:
+            text = texts.recognition_failed(e)
+            if e.amount_cents is None:
+                self.awaiting[e.chat_id] = (e.id, self.clock())
+        keyboard = None if card_id is not None else self.open_keyboard([e])
+        self.send(e.chat_id, text, keyboard, reply_to=card_id)
 
     def flush_due(self):
         now = self.clock()
@@ -345,7 +380,7 @@ class Bot:
 
         self.answer_callback(query_id, toast)
         e = self.store.get(e.id)
-        self.edit(chat_id, message_id, texts.card(e, self.members, self.tz_name) + extra,
+        self.edit(chat_id, message_id, self.card_text(e) + extra,
                   keyboard if keyboard is not None else self.card_keyboard(e))
         self.store.add_card(chat_id, message_id, e.id)
 
@@ -371,7 +406,7 @@ def run(bot: Bot, api, sleep=time.sleep, should_stop=lambda: False, poll_timeout
     while not should_stop():
         try:
             updates = api.call("getUpdates", offset=offset, allowed_updates=["message", "callback_query"],
-                               timeout=1 if bot.has_pending() else poll_timeout)
+                               timeout=1 if bot.has_work() else poll_timeout)
             backoff = 1
         except TelegramError as e:
             delay = e.retry_after or backoff
@@ -389,3 +424,7 @@ def run(bot: Bot, api, sleep=time.sleep, should_stop=lambda: False, poll_timeout
             bot.flush_due()
         except Exception:
             log.exception("answering a batch failed")
+        try:
+            bot.recognize_next()
+        except Exception:
+            log.exception("reading a receipt failed")
