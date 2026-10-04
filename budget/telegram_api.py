@@ -5,10 +5,15 @@ empty and lets tests swap in a fake with the same `call()` signature.
 """
 
 import json
+import logging
+import time
 import urllib.error
 import urllib.request
 
 API_URL = "https://api.telegram.org/bot{token}/{method}"
+SLOW_SECONDS = 3   # a call this much slower than expected gets a warning in the log
+
+log = logging.getLogger(__name__)
 
 
 class TelegramError(Exception):
@@ -38,9 +43,10 @@ class TelegramApi:
             API_URL.format(token=self._token, method=method), data=body,
             headers={"Content-Type": "application/json"})
         # Long polling holds the request open for `timeout` seconds.
-        wait = self.timeout + params.get("timeout", 0)
+        expected = params.get("timeout", 0)
+        started = time.monotonic()
         try:
-            with urllib.request.urlopen(request, timeout=wait) as response:
+            with urllib.request.urlopen(request, timeout=self.timeout + expected) as response:
                 payload = json.load(response)
         except urllib.error.HTTPError as e:
             try:
@@ -50,6 +56,11 @@ class TelegramApi:
         except (urllib.error.URLError, OSError, ValueError) as e:
             reason = getattr(e, "reason", e)
             raise TelegramError(f"{method}: network error: {type(e).__name__}: {reason}") from None
+        finally:
+            # A stalled connection delays every update behind it; make that visible.
+            elapsed = time.monotonic() - started
+            if elapsed > expected + SLOW_SECONDS:
+                log.warning("Telegram %s took %.1f s (expected up to %d s)", method, elapsed, expected)
         if not payload.get("ok"):
             params_ = payload.get("parameters") or {}
             raise TelegramError(f"{method}: {payload.get('description', 'error')}",

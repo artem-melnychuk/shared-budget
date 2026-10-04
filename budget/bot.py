@@ -270,10 +270,18 @@ class Bot:
 
     # --- buttons -------------------------------------------------------------
 
+    def answer_callback(self, query_id: str, text: str | None = None):
+        """Stop the button's spinner (and show a toast). Never fatal: Telegram refuses an
+        answer that comes too late, and the edit that follows matters more than the toast."""
+        try:
+            self.api.call("answerCallbackQuery", callback_query_id=query_id, text=text)
+        except TelegramError as e:
+            log.warning("could not answer a button press: %s", e)
+
     def handle_callback(self, query: dict):
-        answer = dict(callback_query_id=query["id"])
+        query_id = query["id"]
         if self.members.by_user_id(query["from"]["id"]) is None:
-            self.api.call("answerCallbackQuery", text=texts.TOAST_NOT_ALLOWED, **answer)
+            self.answer_callback(query_id, texts.TOAST_NOT_ALLOWED)
             return
         message = query.get("message") or {}
         chat_id = (message.get("chat") or {}).get("id")
@@ -285,14 +293,14 @@ class Bot:
         except ValueError:
             e = None
         if e is None or chat_id is None:
-            self.api.call("answerCallbackQuery", text=texts.TOAST_NOT_FOUND, **answer)
+            self.answer_callback(query_id, texts.TOAST_NOT_FOUND)
             return
 
         toast = None
         keyboard = None   # None: show the card with its normal buttons
         extra = ""
         if action == "o":
-            self.api.call("answerCallbackQuery", **answer)
+            self.answer_callback(query_id)
             self.send_card(chat_id, e, reply_to=message_id)
             return
         if action == "d":
@@ -300,7 +308,7 @@ class Bot:
                                                        _button(texts.BTN_BACK, f"b:{e.id}")]]
         elif action == "D":
             self.store.delete(e.id)
-            self.api.call("answerCallbackQuery", text=texts.TOAST_DELETED, **answer)
+            self.answer_callback(query_id, texts.TOAST_DELETED)
             self.edit(chat_id, message_id, texts.deleted(e.id))
             return
         elif action == "p":
@@ -335,7 +343,7 @@ class Bot:
             toast = texts.TOAST_SAVED
         # "b" (back) and anything unknown just redraw the card.
 
-        self.api.call("answerCallbackQuery", text=toast, **answer)
+        self.answer_callback(query_id, toast)
         e = self.store.get(e.id)
         self.edit(chat_id, message_id, texts.card(e, self.members, self.tz_name) + extra,
                   keyboard if keyboard is not None else self.card_keyboard(e))

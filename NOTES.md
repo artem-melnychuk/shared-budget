@@ -2,6 +2,10 @@
 
 Decisions made while working, newest first.
 
+## 2026-10-04: a late button press must not freeze the card
+
+Live run: pressing "Категория" did nothing; the log showed `answerCallbackQuery: Bad Request: query is too old`. The handler answered the press first and edited the card second, so a refused answer raised and the menu never opened. `Bot.answer_callback` now logs a refused answer as a warning and carries on. Why the press arrived late is not known: a request to api.telegram.org from the same machine took 0.2 s, and only one bot process was running. `TelegramApi.call` now warns about any call more than 3 s slower than expected (`getUpdates` included, beyond its long-poll timeout), so the next delay shows where the time goes.
+
 ## 2026-10-04: dates in the text, reports over several months, amounts after a receipt
 
 Found in the first live run: the owner sent a receipt photo, the bot asked for the amount, and he typed `15.62` as a new message instead of a Telegram reply to the card. It became a second expense and the receipt stayed without an amount.

@@ -362,6 +362,15 @@ class ButtonsTest(BotTestCase):
         menu = self.press(f"c:{self.e.id}")
         self.assertIn("✓ Досуг", [b["text"] for b in buttons(menu)])
 
+    def test_a_refused_answer_still_opens_the_menu(self):
+        # Telegram refuses an answer that comes too late; the menu must open anyway.
+        self.api.errors["answerCallbackQuery"] = TelegramError(
+            "answerCallbackQuery: Bad Request: query is too old and response timeout expired "
+            "or query ID is invalid", 400)
+        with self.assertLogs("budget.bot", "WARNING"):
+            menu = self.press(f"c:{self.e.id}")
+        self.assertIn("Выберите категорию", menu["text"])
+
     def test_mark_reimbursement_and_back(self):
         card = self.press(f"r:{self.e.id}")
         e = self.store.get(self.e.id)
@@ -574,6 +583,14 @@ class TelegramApiTest(unittest.TestCase):
         self.assertTrue(request.full_url.endswith("/getUpdates"))
         self.assertEqual(json.loads(request.data), {"timeout": 30})
         self.assertEqual(urlopen.call_args.kwargs["timeout"], 40)
+
+    def test_slow_call_is_logged(self):
+        with mock.patch("urllib.request.urlopen", return_value=self.respond({"ok": True, "result": []})), \
+                mock.patch("budget.telegram_api.time.monotonic", side_effect=[100.0, 145.0]), \
+                self.assertLogs("budget.telegram_api", "WARNING") as logs:
+            TelegramApi(self.TOKEN).call("getUpdates", timeout=30)
+        self.assertIn("getUpdates took 45.0 s", logs.output[0])
+        self.assertNotIn(self.TOKEN, logs.output[0])
 
     def test_api_error(self):
         payload = {"ok": False, "error_code": 429, "description": "Too Many Requests",
