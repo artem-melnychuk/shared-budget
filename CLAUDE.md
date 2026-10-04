@@ -4,23 +4,23 @@ Shared-expense tracker for a couple living in Nice, France. Goal: see who pays f
 
 This repo is public. Keep personal details (names, real amounts, shops, receipts) out of code, tests, docs and commit messages.
 
-## Status (end of 2026-10-02)
+## Status (end of 2026-10-04)
 
-Built and covered by offline tests: the input layer (forwards, Telegram Desktop export, members, dedup), the SQLite store, balance with the split rule as a parameter, reimbursements, a monthly report with categories and a "where to save" block, CSV export for Excel/Power BI, and a long-polling bot (`python -m budget bot`) on a standard-library Bot API client. Decisions for each piece are in `NOTES.md`.
+The plan is the **Roadmap in `README.md`**: what is done, what is next, what comes later. Keep it current when an item lands or the owner changes priorities; decisions behind each item go into `NOTES.md`.
 
-Not done yet: a first live run with a real bot token, receipt recognition (amounts for photos are typed in by hand for now), 24/7 hosting. There is no approved overall plan: build what the current task asks.
+In daily use since 2026-10-04: the bot runs on the owner's home PC (`python -m budget bot` from the repo root, host venv `.venv`, `.env` next to it) and answers only while that PC is on. Amounts for photos are typed by hand until receipt recognition lands.
 
-## Decided (2026-10-01)
+## Decided
 
-- Input channel: a Telegram bot. Both use Telegram; nothing extra to install.
-- Payments: each pays with their own card, plus cash and online orders/subscriptions (receipts arrive by email). No joint account.
-- Split rule: not decided. Store who paid and whether an expense is shared or personal; compute balances from a rule that can change later (start with 50/50). Don't bake the rule into stored data.
-- Budget: free only. No paid API, no paid hosting, nothing that needs a credit card.
-- Since 2023-08-01 French shops print a receipt only on request (AGEC law); many offer e-receipts by email, SMS or app instead. A receipt photo is therefore only one input: also PDFs/screenshots of e-receipts and quick text entries like `12.50 boulangerie`.
+- Input channel: a Telegram bot. Both use Telegram; nothing extra to install. (2026-10-01)
+- Payments: each pays with their own card, plus cash and online orders/subscriptions (receipts arrive by email). No joint account. (2026-10-01)
+- Budget: free only. No paid API, no paid hosting, nothing that needs a credit card. (2026-10-01)
+- Since 2023-08-01 French shops print a receipt only on request (AGEC law); many offer e-receipts by email, SMS or app instead. A receipt photo is therefore only one input: also PDFs/screenshots of e-receipts and quick text entries like `12.50 boulangerie`. (2026-10-01)
+- The bot shows who spent what, never who owes whom: no debts, shares or split rule in its messages, and a payback is called a transfer ("перевод"). The split rule stays a parameter of the CLI report and the CSV export; never store it with the data. (2026-10-04)
 
 ## Open questions (ask, don't decide silently)
 
-- Receipt recognition: Gemini API free tier (Google uses free-tier request content to improve its products, so receipts would go to Google) vs a local model on the home PC (8 GB VRAM GPU) vs plain OCR plus rules.
+- Receipt recognition: a local vision model on the home PC (Ollama + Qwen3-VL 4B or 8B on an 8 GB VRAM GPU; free, receipts stay home, works only while the PC is on) vs the Gemini API free tier (free and more accurate, but Google uses free-tier content to improve its products, and receipts carry names and loyalty-card numbers). Plain OCR plus rules only finds the total reliably.
 - Where the bot runs 24/7 for free.
 - Thresholds of the "where to save" block: see "Open questions for the owner" in `NOTES.md`.
 
