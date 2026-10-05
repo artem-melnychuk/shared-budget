@@ -578,7 +578,7 @@ class TelegramApiTest(unittest.TestCase):
         return response
 
     def test_call(self):
-        with mock.patch("urllib.request.urlopen", return_value=self.respond({"ok": True, "result": [1]})) as urlopen:
+        with mock.patch("budget.net.urlopen", return_value=self.respond({"ok": True, "result": [1]})) as urlopen:
             result = TelegramApi(self.TOKEN).call("getUpdates", offset=None, timeout=30)
         self.assertEqual(result, [1])
         request = urlopen.call_args.args[0]
@@ -587,7 +587,7 @@ class TelegramApiTest(unittest.TestCase):
         self.assertEqual(urlopen.call_args.kwargs["timeout"], 40)
 
     def test_slow_call_is_logged(self):
-        with mock.patch("urllib.request.urlopen", return_value=self.respond({"ok": True, "result": []})), \
+        with mock.patch("budget.net.urlopen", return_value=self.respond({"ok": True, "result": []})), \
                 mock.patch("budget.telegram_api.time.monotonic", side_effect=[100.0, 145.0]), \
                 self.assertLogs("budget.telegram_api", "WARNING") as logs:
             TelegramApi(self.TOKEN).call("getUpdates", timeout=30)
@@ -597,7 +597,7 @@ class TelegramApiTest(unittest.TestCase):
     def test_api_error(self):
         payload = {"ok": False, "error_code": 429, "description": "Too Many Requests",
                    "parameters": {"retry_after": 5}}
-        with mock.patch("urllib.request.urlopen", return_value=self.respond(payload)):
+        with mock.patch("budget.net.urlopen", return_value=self.respond(payload)):
             with self.assertRaises(TelegramError) as ctx:
                 TelegramApi(self.TOKEN).call("sendMessage", chat_id=1, text="x")
         self.assertEqual((ctx.exception.code, ctx.exception.retry_after), (429, 5))
@@ -606,14 +606,14 @@ class TelegramApiTest(unittest.TestCase):
         body = io.BytesIO(json.dumps({"ok": False, "error_code": 401, "description": "Unauthorized"}).encode())
         error = urllib.error.HTTPError("https://api.telegram.org/bot" + self.TOKEN + "/getMe", 401,
                                        "Unauthorized", {}, body)
-        with mock.patch("urllib.request.urlopen", side_effect=error):
+        with mock.patch("budget.net.urlopen", side_effect=error):
             with self.assertRaises(TelegramError) as ctx:
                 TelegramApi(self.TOKEN).call("getMe")
         self.assertEqual(ctx.exception.code, 401)
         self.assertNotIn(self.TOKEN, str(ctx.exception))
 
     def test_network_error(self):
-        with mock.patch("urllib.request.urlopen", side_effect=urllib.error.URLError("offline")):
+        with mock.patch("budget.net.urlopen", side_effect=urllib.error.URLError("offline")):
             with self.assertRaises(TelegramError) as ctx:
                 TelegramApi(self.TOKEN).call("getMe")
         self.assertIn("network error", str(ctx.exception))

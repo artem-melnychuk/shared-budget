@@ -11,6 +11,8 @@ import re
 import urllib.error
 import urllib.request
 
+from budget import net
+
 API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 # The cheapest stable model, with the largest free daily quota; GEMINI_MODEL overrides it.
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
@@ -111,7 +113,7 @@ class Gemini:
             API_URL.format(model=self.model), data=json.dumps(body).encode(),
             headers={"Content-Type": "application/json", "x-goog-api-key": self._key})
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with net.urlopen(request, timeout=self.timeout) as response:
                 payload = json.load(response)
         except urllib.error.HTTPError as e:
             try:

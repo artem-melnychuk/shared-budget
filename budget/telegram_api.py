@@ -10,9 +10,11 @@ import time
 import urllib.error
 import urllib.request
 
+from budget import net
+
 API_URL = "https://api.telegram.org/bot{token}/{method}"
 FILE_URL = "https://api.telegram.org/file/bot{token}/{path}"
-SLOW_SECONDS = 3   # a call this much slower than expected gets a warning in the log
+SLOW_SECONDS = 3     # a call this much slower than expected gets a warning in the log
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +49,7 @@ class TelegramApi:
         expected = params.get("timeout", 0)
         started = time.monotonic()
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout + expected) as response:
+            with net.urlopen(request, timeout=self.timeout + expected) as response:
                 payload = json.load(response)
         except urllib.error.HTTPError as e:
             try:
@@ -72,8 +74,8 @@ class TelegramApi:
         """The bytes of a file the bot has seen (up to 20 MB). Errors never include the URL."""
         path = self.call("getFile", file_id=file_id)["file_path"]
         try:
-            with urllib.request.urlopen(FILE_URL.format(token=self._token, path=path),
-                                        timeout=self.timeout * 6) as response:
+            with net.urlopen(FILE_URL.format(token=self._token, path=path),
+                             timeout=self.timeout * 6) as response:
                 return response.read()
         except urllib.error.HTTPError as e:
             raise TelegramError(f"download: HTTP {e.code}", e.code) from None

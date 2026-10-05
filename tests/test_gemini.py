@@ -27,7 +27,7 @@ def http_error(code, body):
 
 class GeminiTest(unittest.TestCase):
     def read(self, **patch_kwargs):
-        with mock.patch("urllib.request.urlopen", **patch_kwargs) as urlopen:
+        with mock.patch("budget.net.urlopen", **patch_kwargs) as urlopen:
             result = Gemini(KEY, "gemini-test-model").read_receipt(b"\xff\xd8 jpeg", "image/jpeg")
         return result, urlopen
 

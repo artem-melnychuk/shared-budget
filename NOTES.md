@@ -2,6 +2,12 @@
 
 Decisions made while working, newest first.
 
+## 2026-10-05: the late button presses were IPv6 handshakes stalling for 21 s
+
+The slow-call warnings added on 2026-10-04 showed `getUpdates` taking 51.1 s instead of at most 30 s, every few minutes, plus an occasional read timeout. A 3-minute probe from the home PC (one TCP connect per second to each of Telegram's addresses) found the IPv6 handshake timing out after exactly 21 s in 6 of 51 tries, while IPv4 never took more than 0.05 s and DNS was instant. Python tries the IPv6 address first, and Windows waits 21 s before giving up on a stalled handshake, so every eighth connection or so lost 21 s. A button press that waited behind one got "query is too old".
+
+Fix: `budget/net.py`, used by the Telegram and Gemini clients, opens connections IPv4 first and gives each address at most 5 s before trying the next. Proxies from the environment still apply. Nothing to change on the PC itself; the issue is between this home network and Telegram's IPv6 address.
+
 ## 2026-10-04: receipts are read by Gemini (free tier), through a queue
 
 Owner's choice (option B of three): the Gemini API free tier, accepting that Google may use free-tier content to improve its products, over a local model on the home PC, which is often switched off. The bot will move to free 24/7 hosting next; recognition was built first and works in the current polling bot.
